@@ -168,7 +168,7 @@ class SoriService : Service() {
                 }
                 "response.function_call_arguments.done" -> {
                     val name = ev.optString("name")
-                    if (name == "run_command" || name == "show_chat") {
+                    if (name == "run_command" || name == "show_chat" || name == "press_button") {
                         /* coverfo 화면을 앞으로 → 화면이 명령을 실행(지도·내비 앱 열기 등). 대화는 계속 */
                         main.post { bringToFront(false) }
                         main.postDelayed({ emit(text) }, 700)
