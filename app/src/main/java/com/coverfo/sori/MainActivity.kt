@@ -22,6 +22,12 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import androidx.browser.customtabs.CustomTabsIntent
+import com.kakao.sdk.common.KakaoSdk
+import com.kakao.sdk.navi.NaviClient
+import com.kakao.sdk.navi.model.CoordType
+import com.kakao.sdk.navi.model.Location
+import com.kakao.sdk.navi.model.NaviOption
 import org.json.JSONObject
 
 /**
@@ -38,6 +44,8 @@ class MainActivity : Activity() {
         private const val REQ_NOTI = 12
         private const val REQ_FILE = 13
         private const val HOME = "https://coverfo.com/"
+        /* Google 로그인이 끝나면 돌아올 coverfo 페이지 → 거기서 coverfosori://login 으로 앱에 넘겨줌 (Supabase Redirect URLs 에 등록 필요) */
+        private const val APP_LOGIN = "https://coverfo.com/app-login.html"
         /* 이 앱 안(웹뷰)에서 그대로 여는 곳: coverfo 와 로그인(카카오·네이버·애플·수파베이스) */
         private val INSIDE = listOf("coverfo.com", "podotalk.kr", "supabase.co", "kauth.kakao.com", "accounts.kakao.com",
             "logins.daum.net", "nid.naver.com", "appleid.apple.com", "accounts.google.com")
@@ -49,6 +57,8 @@ class MainActivity : Activity() {
     private var waitOverlay = false
     private var webPermission: PermissionRequest? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private var pendingLogin: String? = null       // 화면을 다 불러온 뒤 넣을 로그인 값(JSON)
+    private var kakaoKey = ""
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -84,6 +94,15 @@ class MainActivity : Activity() {
                 if (!request.isForMainFrame) return false
                 return handleUrl(request.url.toString())
             }
+
+            override fun onPageFinished(view: WebView, url: String) {
+                super.onPageFinished(view, url)
+                pendingLogin?.let { p ->
+                    pendingLogin = null
+                    /* 로그인 스크립트(supabase)가 준비될 시간을 조금 준다 */
+                    web.postDelayed({ js("window.cfAppSession&&window.cfAppSession($p)") }, 1200)
+                }
+            }
         }
         web.webChromeClient = object : WebChromeClient() {
             /* 웹의 🎙 음성 입력(마이크) */
@@ -112,6 +131,7 @@ class MainActivity : Activity() {
             }
         }
 
+        takeLogin(intent)
         val start = intent?.dataString?.takeIf { it.startsWith("https://coverfo.com") } ?: HOME
         web.loadUrl(start)
     }
@@ -122,6 +142,22 @@ class MainActivity : Activity() {
         val scheme = (uri.scheme ?: "").lowercase()
         if (scheme == "http" || scheme == "https") {
             val host = (uri.host ?: "").lowercase()
+            /* Google 로그인: Google 은 앱 안 화면(웹뷰) 로그인을 막는다 → 크롬 창(Custom Tab)에서 열고, 끝나면 APP_LOGIN 으로 돌아오게 */
+            if (host.endsWith("supabase.co") && (uri.path ?: "").contains("/auth/v1/authorize") && uri.getQueryParameter("provider") == "google") {
+                val b = uri.buildUpon().clearQuery()
+                for (k in uri.queryParameterNames) {
+                    if (k == "redirect_to") b.appendQueryParameter(k, APP_LOGIN)
+                    else for (v in uri.getQueryParameters(k)) b.appendQueryParameter(k, v)
+                }
+                if (uri.getQueryParameter("redirect_to") == null) b.appendQueryParameter("redirect_to", APP_LOGIN)
+                val target = b.build()
+                try {
+                    CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(this, target)
+                } catch (e: Exception) {
+                    openExternal(Intent(Intent.ACTION_VIEW, target))
+                }
+                return true
+            }
             if (INSIDE.any { host == it || host.endsWith(".$it") }) return false
             openExternal(Intent(Intent.ACTION_VIEW, uri))
             return true
@@ -281,9 +317,27 @@ class MainActivity : Activity() {
         SoriService.instance?.showBubble()
     }
 
+    /* coverfosori://login?at=…&rt=… (또는 ?code=…) → 화면(웹)에 로그인 값 전달 */
+    private fun takeLogin(i: Intent?): Boolean {
+        val d = i?.data ?: return false
+        if (d.scheme != "coverfosori" || d.host != "login") return false
+        val j = JSONObject()
+        d.getQueryParameter("code")?.let { j.put("code", it) }
+        d.getQueryParameter("at")?.let { j.put("at", it) }
+        d.getQueryParameter("rt")?.let { j.put("rt", it) }
+        if (j.length() == 0) return true
+        pendingLogin = j.toString()
+        return true
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (takeLogin(intent)) {
+            /* 앱이 이미 열려 있으면 바로 넣는다 */
+            pendingLogin?.let { p -> pendingLogin = null; js("window.cfAppSession&&window.cfAppSession($p)") }
+            return
+        }
         if (intent.getBooleanExtra("openChat", false)) js("window.cfLiveOpen&&window.cfLiveOpen()")
     }
 
@@ -327,6 +381,28 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun isForeground(): Boolean = resumed
+
+        /* 카카오내비 바로 안내 (카카오 공식 Android SDK). 돌려주는 값: ok · noapp(카카오내비 없음) · err:… */
+        @JavascriptInterface
+        fun kakaoNavi(name: String, lat: String, lng: String, nativeKey: String): String {
+            return try {
+                if (kakaoKey != nativeKey) {
+                    KakaoSdk.init(applicationContext, nativeKey)
+                    kakaoKey = nativeKey
+                }
+                if (!NaviClient.instance.isKakaoNaviInstalled(this@MainActivity)) return "noapp"
+                val i = NaviClient.instance.navigateIntent(
+                    Location(name, lng, lat),
+                    NaviOption(coordType = CoordType.WGS84)
+                )
+                runOnUiThread {
+                    try { startActivity(i) } catch (e: Exception) { }
+                }
+                "ok"
+            } catch (e: Throwable) {
+                "err:" + (e.message ?: e.javaClass.simpleName)
+            }
+        }
 
         @JavascriptInterface
         fun version(): String = try {

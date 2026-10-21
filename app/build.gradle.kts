@@ -49,4 +49,6 @@ android {
 
 dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.kakao.sdk:v2-navi:2.20.6")          // 카카오내비 바로 안내 (카카오 공식 Android SDK · Kotlin 2.0 과 맞는 버전)
+    implementation("androidx.browser:browser:1.8.0")         // Google 로그인을 크롬 창(Custom Tab)에서
 }
