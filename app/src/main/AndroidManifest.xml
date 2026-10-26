@@ -11,8 +11,53 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <!-- 카카오내비 설치 여부 확인 (안드로이드 11+ 앱 목록 보기 제한) -->
+    <!-- v4 ② "카톡 켜 줘" 처럼 말로 열 수 있는 앱 (AppLauncher.KNOWN 과 같은 목록) + 기본 기능(카메라·전화·문자 등) -->
     <queries>
         <package android:name="com.locnall.KimGiSa" />
+        <package android:name="com.kakao.talk" />
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.google.android.apps.youtube.music" />
+        <package android:name="net.daum.android.map" />
+        <package android:name="com.kakao.taxi" />
+        <package android:name="com.kakaopay.app" />
+        <package android:name="com.kakaobank.channel" />
+        <package android:name="com.nhn.android.search" />
+        <package android:name="com.nhn.android.nmap" />
+        <package android:name="com.nhn.android.band" />
+        <package android:name="com.naver.labs.translator" />
+        <package android:name="com.google.android.apps.maps" />
+        <package android:name="com.skt.tmap.ku" />
+        <package android:name="com.coupang.mobile.eats" />
+        <package android:name="com.coupang.mobile" />
+        <package android:name="com.sampleapp" />
+        <package android:name="com.fineapp.yogiyo" />
+        <package android:name="com.towneers.www" />
+        <package android:name="viva.republica.toss" />
+        <package android:name="com.instagram.android" />
+        <package android:name="com.facebook.katana" />
+        <package android:name="com.zhiliaoapp.musically" />
+        <package android:name="com.netflix.mediaclient" />
+        <package android:name="com.iloen.melon" />
+        <package android:name="com.ktmusic.geniemusic" />
+        <package android:name="com.android.chrome" />
+        <package android:name="com.sec.android.app.sbrowser" />
+        <package android:name="com.google.android.gm" />
+        <package android:name="com.elevenst" />
+        <package android:name="com.ebay.kr.gmarket" />
+        <package android:name="com.musinsa.store" />
+        <package android:name="com.cultsotry.yanolja.nativeapp" />
+        <package android:name="kr.goodchoice.abouthere" />
+        <package android:name="com.korail.talk" />
+        <intent><action android:name="android.media.action.STILL_IMAGE_CAMERA" /></intent>
+        <intent><action android:name="android.intent.action.DIAL" /></intent>
+        <intent><action android:name="android.intent.action.SHOW_ALARMS" /></intent>
+        <intent><action android:name="android.settings.SETTINGS" /></intent>
+        <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.APP_MESSAGING" /></intent>
+        <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.APP_GALLERY" /></intent>
+        <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.APP_CALENDAR" /></intent>
+        <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.APP_CALCULATOR" /></intent>
+        <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.APP_CONTACTS" /></intent>
+        <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.APP_EMAIL" /></intent>
         <intent>
             <action android:name="android.support.customtabs.action.CustomTabsService" />
         </intent>

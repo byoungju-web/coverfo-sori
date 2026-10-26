@@ -28,6 +28,11 @@ import com.kakao.sdk.navi.NaviClient
 import com.kakao.sdk.navi.model.CoordType
 import com.kakao.sdk.navi.model.Location
 import com.kakao.sdk.navi.model.NaviOption
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -43,6 +48,7 @@ class MainActivity : Activity() {
         private const val REQ_MIC = 11
         private const val REQ_NOTI = 12
         private const val REQ_FILE = 13
+        private const val REQ_WAKE = 14
         private const val HOME = "https://coverfo.com/"
         /* Google 로그인이 끝나면 돌아올 coverfo 페이지 → 거기서 coverfosori://login 으로 앱에 넘겨줌 (Supabase Redirect URLs 에 등록 필요) */
         private const val APP_LOGIN = "https://coverfo.com/app-login.html"
@@ -59,6 +65,7 @@ class MainActivity : Activity() {
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var pendingLogin: String? = null       // 화면을 다 불러온 뒤 넣을 로그인 값(JSON)
     private var kakaoKey = ""
+    private var pendingWake: Pair<String, String>? = null   // 마이크 권한을 받은 뒤 켤 이름 대기 (이름, 로그인 키)
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -84,7 +91,8 @@ class MainActivity : Activity() {
         s.databaseEnabled = true
         s.mediaPlaybackRequiresUserGesture = false
         s.setSupportMultipleWindows(false)
-        s.userAgentString = s.userAgentString + " CoverfoSori/1"
+        /* 스토어용은 ' store' 를 붙여 웹이 구분할 수 있게 (스토어 정책상 화면에서 빼야 하는 것들) */
+        s.userAgentString = s.userAgentString + " CoverfoSori/1" + (if (BuildConfig.STORE) " store" else "")
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
         web.addJavascriptInterface(Bridge(), "CoverfoApp")
@@ -271,6 +279,114 @@ class MainActivity : Activity() {
         }
     }
 
+    /* ── ① 이름 부르기 대기 켜기·끄기 ── */
+    fun setWake(on: Boolean, name: String, token: String) {
+        val p = SoriService.prefs(this)
+        if (name.isNotBlank()) {
+            val clean = name.filter { it.isLetterOrDigit() }.take(10)
+            if (clean.isNotEmpty() && clean != SoriService.wakeName(this)) {
+                p.edit().putString("wakeName", clean).putString("wakeAlts", "[]").apply()   // 이름이 바뀌면 시험으로 더한 말은 지운다
+                if (SoriService.instance != null) startService(Intent(this, SoriService::class.java).setAction("wake_names"))
+            }
+        }
+        if (token.isNotBlank()) fetchDevice(token)
+        if (!on) {
+            p.edit().putBoolean("wakeOn", false).apply()
+            if (SoriService.instance != null) startService(Intent(this, SoriService::class.java).setAction("wake_off"))
+            wakeEmitState()
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            pendingWake = Pair(name, token)
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_WAKE)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !p.getBoolean("askedNotiWake", false)) {
+            p.edit().putBoolean("askedNotiWake", true).apply()
+            pendingWake = Pair(name, token)
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTI)
+            return
+        }
+        /* 처음 한 번: 마이크가 늘 켜져 있다는 것을 분명히 알리고 동의를 받는다 (구글 플레이 정책) */
+        if (!p.getBoolean("wakeAgreed", false)) {
+            AlertDialog.Builder(this)
+                .setTitle("'" + SoriService.wakeName(this) + "' 하고 부르면 대답할까요?")
+                .setMessage("이름을 들으려고 마이크가 항상 켜져 있어요.\n\n" +
+                    "• 소리는 폰 안에서만 이름을 찾는 데 쓰이고, 서버로 보내지 않아요.\n" +
+                    "• 이름이 들린 뒤의 말만 대화로 보내요. 대화는 1분마다 크레딧이 차감돼요.\n" +
+                    "• 대기 중에는 알림창에 표시가 늘 보이고, 알림의 '대기 끄기'나 이 화면에서 언제든 끌 수 있어요.\n" +
+                    "• 처음 켤 때 음성 인식 파일(약 80MB)을 한 번 내려받아요. 와이파이에서 켜 주세요.")
+                .setNegativeButton("취소") { _, _ -> wakeEmitState() }
+                .setPositiveButton("동의하고 켜기") { _, _ ->
+                    p.edit().putBoolean("wakeAgreed", true).apply()
+                    setWake(true, "", "")
+                }
+                .setCancelable(false)
+                .show()
+            return
+        }
+        p.edit().putBoolean("wakeOn", true).apply()
+        startWakeService()
+        /* 다른 앱이 앞에 있을 때 앱을 열거나 coverfo 화면을 불러오려면 필요 (없어도 대기·대화는 됨) */
+        if (!Settings.canDrawOverlays(this) && !p.getBoolean("overlayAskedWake", false)) {
+            p.edit().putBoolean("overlayAskedWake", true).apply()
+            AlertDialog.Builder(this)
+                .setTitle("다른 앱 위에 표시를 허용할까요?")
+                .setMessage("유튜브·카카오맵 같은 다른 앱을 보는 중에 \"카톡 켜 줘\"처럼 말해서 앱을 열려면 이 권한이 필요해요.")
+                .setNegativeButton("다음에 하기", null)
+                .setPositiveButton("권한 설정") { _, _ ->
+                    try { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) } catch (e: Exception) { }
+                }
+                .show()
+        }
+        wakeEmitState()
+    }
+
+    private fun startWakeService() {
+        try {
+            startForegroundService(Intent(this, SoriService::class.java).setAction("wake_on"))
+        } catch (e: Exception) {
+            emit("{\"type\":\"sori.wake\",\"state\":\"error\",\"msg\":" + JSONObject.quote("대기를 시작하지 못했어요: " + (e.message ?: "")) + "}")
+        }
+    }
+
+    fun wakeStateJson(): String {
+        val p = SoriService.prefs(this)
+        val alts = JSONArray()
+        SoriService.wakeAlts(this).forEach { alts.put(it) }
+        return JSONObject()
+            .put("on", p.getBoolean("wakeOn", false))
+            .put("name", SoriService.wakeName(this))
+            .put("alts", alts)
+            .put("model", VoskStore.ready(this))
+            .put("device", (p.getString("device", "") ?: "").isNotEmpty())
+            .put("overlay", Settings.canDrawOverlays(this))
+            .put("store", BuildConfig.STORE)
+            .toString()
+    }
+
+    private fun wakeEmitState() {
+        emit(JSONObject(wakeStateJson()).put("type", "sori.wake").put("state", "config").toString())
+    }
+
+    /* 대기 중 대화를 시작할 때 쓰는 'coverfo 소리 기기 키' (30일) — 로그인 키(1시간)를 주고 받아 둔다 */
+    private fun fetchDevice(token: String) {
+        Thread {
+            try {
+                val req = Request.Builder().url("https://coverfo.com/api/talk-live")
+                    .header("Authorization", "Bearer $token")
+                    .post("{\"op\":\"device\"}".toRequestBody("application/json".toMediaType()))
+                    .build()
+                OkHttpClient().newCall(req).execute().use { r ->
+                    val j = try { JSONObject(r.body?.string() ?: "") } catch (e: Exception) { null }
+                    val d = j?.optString("device") ?: ""
+                    if (r.code == 200 && d.isNotEmpty()) SoriService.prefs(this).edit().putString("device", d).apply()
+                }
+            } catch (e: Exception) { }
+        }.start()
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         val ok = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
@@ -286,6 +402,14 @@ class MainActivity : Activity() {
             }
         } else if (requestCode == REQ_NOTI) {
             pendingToken?.let { startSori(it) }
+            pendingWake?.let { (n, t) -> pendingWake = null; setWake(true, n, t) }
+        } else if (requestCode == REQ_WAKE) {
+            val pw = pendingWake
+            pendingWake = null
+            if (pw != null) {
+                if (ok) setWake(true, pw.first, pw.second)
+                else emit("{\"type\":\"sori.wake\",\"state\":\"error\",\"msg\":\"마이크 사용을 허용해야 이름을 듣고 대답할 수 있어요\"}")
+            }
         }
     }
 
@@ -303,6 +427,11 @@ class MainActivity : Activity() {
         resumed = true
         current = this
         SoriService.instance?.hideBubble()
+        /* 이름 대기를 켜 두었는데 서비스가 없으면(폰을 껐다 켰거나 앱이 정리됐을 때) 화면이 보일 때 다시 켠다 */
+        if (SoriService.prefs(this).getBoolean("wakeOn", false) && SoriService.instance == null &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startWakeService()
+        }
         /* '권한 설정' 에서 돌아왔으면(허용 여부와 상관없이) 시작 */
         if (waitOverlay) {
             waitOverlay = false
@@ -401,6 +530,52 @@ class MainActivity : Activity() {
                 "ok"
             } catch (e: Throwable) {
                 "err:" + (e.message ?: e.javaClass.simpleName)
+            }
+        }
+
+        /* ① 이름 부르기 대기: {"on":true,"name":"소리야","token":"로그인키"} */
+        @JavascriptInterface
+        fun wakeSet(json: String) {
+            val j = try { JSONObject(json) } catch (e: Exception) { JSONObject() }
+            runOnUiThread { setWake(j.optBoolean("on"), j.optString("name"), j.optString("token")) }
+        }
+
+        @JavascriptInterface
+        fun wakeState(): String = wakeStateJson()
+
+        /* 시험: 켜면 이름을 불러도 대화를 시작하지 않고, 들린 말을 화면에 보여 준다 */
+        @JavascriptInterface
+        fun wakeTest(on: Boolean) {
+            if (SoriService.instance != null) startService(Intent(this@MainActivity, SoriService::class.java).setAction("wake_test").putExtra("on", on))
+        }
+
+        /* 시험에서 들린 말을 '이름으로 인정'에 더하거나(op=add) 빼기(op=del) */
+        @JavascriptInterface
+        fun wakeAlt(op: String, text: String): String {
+            val p = SoriService.prefs(this@MainActivity)
+            val list = SoriService.wakeAlts(this@MainActivity).toMutableList()
+            val t = text.filter { it.isLetterOrDigit() }.take(16)
+            if (op == "add" && t.isNotEmpty() && !list.contains(t) && list.size < 8) list.add(t)
+            if (op == "del") list.remove(t)
+            val a = JSONArray(); list.forEach { a.put(it) }
+            p.edit().putString("wakeAlts", a.toString()).apply()
+            if (SoriService.instance != null) startService(Intent(this@MainActivity, SoriService::class.java).setAction("wake_names"))
+            return wakeStateJson()
+        }
+
+        /* 화면이 열릴 때마다 로그인 키를 넘겨 '기기 키'를 새로 받아 둔다 (대기 중 대화용) */
+        @JavascriptInterface
+        fun wakeAuth(token: String) {
+            if (token.isNotBlank()) fetchDevice(token)
+        }
+
+        /* 갤럭시 배터리 절약이 대기를 끄지 않도록: 배터리 최적화 설정 화면 열기 */
+        @JavascriptInterface
+        fun openBattery() {
+            runOnUiThread {
+                try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (e: Exception) {
+                    try { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) } catch (x: Exception) { }
+                }
             }
         }
 
