@@ -31,8 +31,9 @@ object KakaoSend {
 
     fun installed(ctx: Context): Boolean = ctx.packageManager.getLaunchIntentForPackage(PKG) != null
 
-    /** 이 설치 파일에 자동 보내기가 들어 있는지 (APK판만) */
-    fun autoAvailable(): Boolean = !BuildConfig.STORE
+    /** 이 설치 파일에 자동 보내기가 들어 있는지.
+     *  v5.1: 꺼 둔다 — 접근성 서비스를 넣은 APK 는 Google Play 프로텍트가 설치를 막아서(2026-10-28) 모든 버전이 1탭 보내기로 보낸다. */
+    fun autoAvailable(): Boolean = false
 
     /** 이용자가 설정 → 접근성에서 'coverfo 소리 카톡 자동 보내기'를 켰는지 */
     fun autoEnabled(ctx: Context): Boolean {
