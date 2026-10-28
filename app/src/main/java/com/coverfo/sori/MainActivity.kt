@@ -343,6 +343,30 @@ class MainActivity : Activity() {
         wakeEmitState()
     }
 
+    /* ── v5 💬 카톡 자동 보내기 켜기 (APK판만): 접근성은 이용자가 설정에서 직접 켜야 한다 ── */
+    fun kakaoAutoSetup() {
+        if (!KakaoSend.autoAvailable()) return
+        if (KakaoSend.autoEnabled(this)) {
+            try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (e: Exception) { }
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("카톡 자동 보내기를 켤까요?")
+            .setMessage("\"소리야, 미팅 준비해서 카톡으로도 보내\"처럼 시키고 보내기를 확인하면, 카톡 공유 화면에서 받는 사람 이름으로 대화방을 찾아 대신 눌러 줘요.\n\n" +
+                "• 카카오톡 화면만 보고, 화면 내용은 저장하거나 어디로도 보내지 않아요.\n" +
+                "• 보내기를 확인했을 때만 동작하고, 언제든 끌 수 있어요.\n\n" +
+                "켜는 방법: 설정 열기 → '설치된 앱'(또는 '다운로드한 앱') → 'coverfo 소리 · 카톡 자동 보내기' → 켜기\n\n" +
+                "'제한된 설정' 이라고 나오면: 아래 '앱 정보' → 오른쪽 위 ⋮ → '제한된 설정 허용' → 다시 설정 열기")
+            .setNegativeButton("취소", null)
+            .setNeutralButton("앱 정보") { _, _ ->
+                try { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) } catch (e: Exception) { }
+            }
+            .setPositiveButton("설정 열기") { _, _ ->
+                try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (e: Exception) { }
+            }
+            .show()
+    }
+
     private fun startWakeService() {
         try {
             startForegroundService(Intent(this, SoriService::class.java).setAction("wake_on"))
@@ -577,6 +601,41 @@ class MainActivity : Activity() {
                     try { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) } catch (x: Exception) { }
                 }
             }
+        }
+
+        /* v5 커넥션 허브 2.0: 구글 등 연결(로그인) 화면은 앱 안 화면(웹뷰)에서 막혀 있어 크롬 창으로 연다 */
+        @JavascriptInterface
+        fun openTab(url: String) {
+            val u = Uri.parse(url)
+            if (u.scheme != "https") return
+            runOnUiThread {
+                try {
+                    CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(this@MainActivity, u)
+                } catch (e: Exception) {
+                    openExternal(Intent(Intent.ACTION_VIEW, u))
+                }
+            }
+        }
+
+        /* v5 카톡 보내기: {"to":["김철수"],"text":"…"} → "auto"(자동으로 찾는 중) · "share"(대화방을 눌러 주세요) · "noapp" */
+        @JavascriptInterface
+        fun kakaoSend(json: String): String {
+            val j = try { JSONObject(json) } catch (e: Exception) { return "share" }
+            val a = j.optJSONArray("to")
+            val to = if (a == null) emptyList() else (0 until a.length()).map { a.optString(it) }
+            return KakaoSend.send(this@MainActivity, to, j.optString("text"))
+        }
+
+        /* v5 카톡 자동 보내기 상태: available = APK판인지, enabled = 접근성을 켰는지 */
+        @JavascriptInterface
+        fun kakaoAutoState(): String = JSONObject()
+            .put("available", KakaoSend.autoAvailable())
+            .put("enabled", KakaoSend.autoEnabled(this@MainActivity))
+            .toString()
+
+        @JavascriptInterface
+        fun kakaoAutoSetup() {
+            runOnUiThread { this@MainActivity.kakaoAutoSetup() }
         }
 
         @JavascriptInterface

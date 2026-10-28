@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="kakao_auto_label">coverfo 소리 · 카톡 자동 보내기</string>
+    <string name="kakao_auto_desc">coverfo 소리에서 "카톡으로도 보내"라고 하고 보내기를 확인했을 때만, 카카오톡 공유 화면에서 받는 사람 이름으로 대화방을 찾아 대신 눌러 줍니다. 카카오톡 화면만 보고, 화면 내용은 저장하거나 어디로도 보내지 않습니다. 언제든 여기서 끌 수 있어요.</string>
+</resources>

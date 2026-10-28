@@ -49,6 +49,9 @@ import java.util.concurrent.TimeUnit
  * · v4 ① 이름 부르기 대기(WakeListener): 대화가 없을 때도 "'소리야' 하고 부르면 대답해요" 알림과 함께 폰 안에서만 이름을 기다린다.
  *   이름 + 말이 들리면 그때 연결 → 들은 말(이름 뒤 명령)을 먼저 보내고 대화. 20초 동안 아무 말이 없으면 대화를 끝내고 다시 대기.
  * · v4 ② 앱 열기(open_app)·대화 끝내기(end_conversation)는 이 서비스가 직접 처리.
+ * · v5 커넥션 허브 2.0: run_relay · relay_answer 를 이 서비스가 /api/hub 로 직접 실행 (캘린더→드라이브→요약 문서→메일·카톡).
+ *   남에게 보내기 전에는 서버가 status "confirm" 을 돌려주고, 비서가 말로 묻고, 대답(relay_answer)을 다시 서버로 보낸다.
+ *   끝나면 카톡 보내기는 KakaoSend (1탭 / APK판은 자동 보내기)로 폰에서 한다.
  */
 class SoriService : Service(), WakeListener.Callback {
 
@@ -56,6 +59,7 @@ class SoriService : Service(), WakeListener.Callback {
         @Volatile var instance: SoriService? = null
         private const val CH = "sori"
         private const val API = "https://coverfo.com/api/talk-live"
+        private const val HUB = "https://coverfo.com/api/hub"
         private const val RATE = 24000
         const val DEFAULT_NAME = "소리야"
         private const val IDLE_MS = 20_000L
@@ -91,6 +95,12 @@ class SoriService : Service(), WakeListener.Callback {
     @Volatile private var downloading = false
     private var wakeTest = false
     private var fgStarted = false
+    @Volatile private var relayBusy = false        // v5 릴레이 실행 중 (그동안은 '말이 없어 대기로' 하지 않는다)
+    @Volatile private var relayState: String? = null   // v5 보내기 확인을 기다리는 중인 서버 상태
+    private val hubHttp = OkHttpClient.Builder()
+        .callTimeout(170, TimeUnit.SECONDS)
+        .readTimeout(170, TimeUnit.SECONDS)
+        .build()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -284,7 +294,7 @@ class SoriService : Service(), WakeListener.Callback {
 
     private fun connect() {
         try {
-            val body = JSONObject().put("op", "token").put("name", wakeName(this)).put("store", BuildConfig.STORE)
+            val body = JSONObject().put("op", "token").put("name", wakeName(this)).put("store", BuildConfig.STORE).put("relay", 1)
             val (code, j) = post(body.toString())
             if (code != 200 || j == null || j.optString("key").isEmpty()) {
                 val msg = when (code) { 401 -> "로그인 후 사용할 수 있어요"; 402 -> "크레딧이 부족해요"; else -> "연결하지 못했어요" }
@@ -358,6 +368,7 @@ class SoriService : Service(), WakeListener.Callback {
                             main.postDelayed({ emit(text) }, 700)
                         }
                         "open_app" -> main.post { openApp(ev) }
+                        "run_relay", "relay_answer" -> main.post { relay(ev) }
                         "end_conversation" -> {
                             sendOutput(ev.optString("call_id"), JSONObject().put("ok", true), false)
                             emit("{\"type\":\"sori.log\",\"text\":\"■ 대화를 마쳤어요\"}")
@@ -392,6 +403,110 @@ class SoriService : Service(), WakeListener.Callback {
         val ok = r.optBoolean("ok")
         sendOutput(ev.optString("call_id"), r, !ok)          // 못 열었으면 비서가 짧게 알려 주도록
         emit(JSONObject().put("type", "sori.log").put("text", (if (ok) "▶ 앱 열기: " else "⚠️ 앱을 열지 못했어요: ") + r.optString("app", name)).toString())
+    }
+
+    /* ── v5 커넥션 허브 2.0 릴레이 ── */
+    private fun relay(ev: JSONObject) {
+        val callId = ev.optString("call_id")
+        val args = try { JSONObject(ev.optString("arguments", "{}")) } catch (e: Exception) { JSONObject() }
+        val body = JSONObject()
+        if (ev.optString("name") == "run_relay") {
+            val goal = args.optString("goal").trim()
+            if (goal.isEmpty()) {
+                sendOutput(callId, JSONObject().put("status", "error").put("say", "무엇을 할지 다시 말씀해 주세요."), true)
+                return
+            }
+            body.put("op", "run").put("goal", goal.take(1000)).put("from", "voice")
+            relayLog("🔁 릴레이: $goal")
+        } else {
+            val st = relayState
+            if (st == null) {
+                sendOutput(callId, JSONObject().put("status", "error").put("say", "지금 확인할 일이 없어요."), true)
+                return
+            }
+            val ok = args.optBoolean("approve", false)
+            body.put("op", "confirm").put("state", st).put("approve", ok)
+            relayLog(if (ok) "🙆 진행할게요" else "🙅 취소했어요")
+        }
+        relayBusy = true
+        val tok = token
+        Thread {
+            var out: JSONObject
+            var client: JSONArray? = null
+            try {
+                var (code, j) = hubPost(tok, body.toString())
+                if (code == 401) {
+                    /* 화면 로그인 키(1시간)가 만료됐으면 기기 키로 한 번 더 */
+                    val dev = prefs(this).getString("device", "") ?: ""
+                    if (dev.isNotEmpty() && dev != tok) {
+                        val r = hubPost(dev, body.toString())
+                        code = r.first
+                        j = r.second
+                    }
+                }
+                val status = j?.optString("status") ?: ""
+                out = if (code == 200 && status == "confirm") {
+                    relayState = j?.optString("state")
+                    JSONObject().put("status", "confirm").put("question", j?.optString("say") ?: "")
+                } else if (code == 200 && j != null) {
+                    relayState = null
+                    client = j.optJSONArray("client")
+                    JSONObject().put("status", "done").put("say", j.optString("say"))
+                } else {
+                    relayState = null
+                    val err = j?.optString("error") ?: ""
+                    val msg = when (code) { 401 -> "로그인이 필요해요."; 402 -> "크레딧이 부족해요."; else -> if (err.isNotBlank()) err else "처리하지 못했어요." }
+                    JSONObject().put("status", "error").put("say", msg)
+                }
+            } catch (e: Exception) {
+                relayState = null
+                out = JSONObject().put("status", "error").put("say", "연결이 불안정해 처리하지 못했어요.")
+            }
+            val result = out
+            val actions = client
+            main.post {
+                relayBusy = false
+                lastActive = System.currentTimeMillis()
+                if (running) sendOutput(callId, result, true)
+                val say = result.optString("say").ifBlank { result.optString("question") }
+                if (say.isNotBlank()) relayLog((if (result.optString("status") == "confirm") "🙋 " else "■ ") + say)
+                /* 카톡은 비서가 결과를 말할 시간을 조금 준 뒤에 연다 */
+                if (actions != null && actions.length() > 0) main.postDelayed({ runClient(actions) }, 3_500)
+            }
+        }.start()
+    }
+
+    private fun hubPost(tok: String, body: String): Pair<Int, JSONObject?> {
+        val req = Request.Builder().url(HUB)
+            .header("Authorization", "Bearer $tok")
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .build()
+        return hubHttp.newCall(req).execute().use { r ->
+            val t = r.body?.string() ?: ""
+            val j = try { JSONObject(t) } catch (e: Exception) { null }
+            Pair(r.code, j)
+        }
+    }
+
+    /* 릴레이가 끝난 뒤 폰에서 할 일 (지금은 카톡 보내기) */
+    private fun runClient(c: JSONArray) {
+        for (i in 0 until c.length()) {
+            val a = c.optJSONObject(i) ?: continue
+            if (a.optString("type") != "kakao") continue
+            val toA = a.optJSONArray("to")
+            val to = if (toA == null) emptyList() else (0 until toA.length()).map { toA.optString(it) }
+            val r = KakaoSend.send(this, to, a.optString("text"))
+            relayLog(when (r) {
+                "auto" -> "💬 카톡: 대화방을 찾아 보내는 중이에요"
+                "noapp" -> "💬 카카오톡이 없어 공유 창을 열었어요"
+                else -> "💬 카톡에서 보낼 대화방을 눌러 주세요"
+            })
+            if (r != "auto") break      // 1탭 보내기는 한 번만 (화면이 겹치지 않게)
+        }
+    }
+
+    fun relayLog(text: String) {
+        emit(JSONObject().put("type", "sori.log").put("text", text).toString())
     }
 
     private fun sendOutput(callId: String, out: JSONObject, respond: Boolean) {
@@ -438,7 +553,7 @@ class SoriService : Service(), WakeListener.Callback {
     private val idle: Runnable = object : Runnable {
         override fun run() {
             if (!running) return
-            if (wakeOn && !playing && System.currentTimeMillis() - lastActive > IDLE_MS) {
+            if (wakeOn && !playing && !relayBusy && System.currentTimeMillis() - lastActive > IDLE_MS) {
                 shutdown("말씀이 없어 대기로 돌아갔어요", null, false)
                 return
             }
@@ -638,6 +753,7 @@ class SoriService : Service(), WakeListener.Callback {
             /* 이름을 듣고 연결하다 실패했으면 모아 둔 말은 버리고 다시 대기 */
             wake?.let { it.stop(); wake = null }
             fromWake = false
+            relayState = null
             if (wakeOn) {
                 startFg()
                 main.postDelayed({ if (wakeOn && !running) ensureModelThenListen() }, 600)
