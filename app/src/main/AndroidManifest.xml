@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- v6 ☀️ 아침 브리핑: 폰을 다시 켜면 알림 알람을 다시 건다 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- 카카오내비 설치 여부 확인 (안드로이드 11+ 앱 목록 보기 제한) -->
     <!-- v4 ② "카톡 켜 줘" 처럼 말로 열 수 있는 앱 (AppLauncher.KNOWN 과 같은 목록) + 기본 기능(카메라·전화·문자 등) -->
@@ -89,6 +91,15 @@
                 <data android:scheme="coverfosori" android:host="login" />
             </intent-filter>
         </activity>
+
+        <!-- v6 ☀️ 아침 브리핑 알림: 알람(앱 안에서만) · 폰 재시작/앱 업데이트 뒤 다시 걸기 -->
+        <receiver android:name=".BriefReceiver" android:exported="false" />
+        <receiver android:name=".BriefBootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".SoriService"

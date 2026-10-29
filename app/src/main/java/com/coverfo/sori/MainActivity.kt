@@ -49,6 +49,7 @@ class MainActivity : Activity() {
         private const val REQ_NOTI = 12
         private const val REQ_FILE = 13
         private const val REQ_WAKE = 14
+        private const val REQ_BRIEF = 15
         private const val HOME = "https://coverfo.com/"
         /* Google 로그인이 끝나면 돌아올 coverfo 페이지 → 거기서 coverfosori://login 으로 앱에 넘겨줌 (Supabase Redirect URLs 에 등록 필요) */
         private const val APP_LOGIN = "https://coverfo.com/app-login.html"
@@ -492,6 +493,8 @@ class MainActivity : Activity() {
             return
         }
         if (intent.getBooleanExtra("openChat", false)) js("window.cfLiveOpen&&window.cfLiveOpen()")
+        /* v6 ☀️ 아침 브리핑 알림을 누르면: 앱이 이미 열려 있어도 그 주소(coverfo.com/brief?play=1)로 */
+        intent.dataString?.takeIf { it.startsWith("https://coverfo.com/") }?.let { web.loadUrl(it) }
     }
 
     @Deprecated("Deprecated in Java")
@@ -637,6 +640,20 @@ class MainActivity : Activity() {
         fun kakaoAutoSetup() {
             runOnUiThread { this@MainActivity.kakaoAutoSetup() }
         }
+
+        /* v6 ☀️ 아침 브리핑 알림: {"on":true,"hh":7,"mm":0,"days":[1,2,3,4,5]} — 알림 권한이 없으면 한 번 묻는다 */
+        @JavascriptInterface
+        fun briefAlarm(json: String): String {
+            BriefAlarm.set(this@MainActivity, json)
+            val on = try { JSONObject(json).optBoolean("on") } catch (e: Exception) { false }
+            if (on && Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                runOnUiThread { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_BRIEF) }
+            }
+            return BriefAlarm.stateJson(this@MainActivity)
+        }
+
+        @JavascriptInterface
+        fun briefState(): String = BriefAlarm.stateJson(this@MainActivity)
 
         @JavascriptInterface
         fun version(): String = try {
