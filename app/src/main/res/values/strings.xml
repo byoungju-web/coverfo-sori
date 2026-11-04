@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">coverfo 소리</string>
+    <!-- v8 바로가기 -->
+    <string name="sc_talk">소리와 대화</string>
+    <string name="sc_talk_long">🗣️ 소리와 바로 대화하기</string>
 </resources>

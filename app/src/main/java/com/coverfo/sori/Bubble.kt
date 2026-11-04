@@ -17,21 +17,22 @@ import kotlin.math.abs
  * 다른 앱(카카오맵·유튜브…) 위에 떠 있는 🗣️ 아이콘. '다른 앱 위에 표시' 권한이 있을 때만.
  * · 끌어서 옮기기(위치는 기억) · 누르면 coverfo 소리 화면(대화 내용)으로.
  * · 소리가 말하는 중이면 분홍색, 듣는 중이면 보라색.
+ * · v8: 작게 (60dp → 44dp) — '소리야' 로 대화가 시작될 때도 뜬다.
  */
 class Bubble(private val ctx: Context, private val onTap: () -> Unit) {
 
     private val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val main = Handler(Looper.getMainLooper())
     private val prefs = ctx.getSharedPreferences("sori", Context.MODE_PRIVATE)
-    private val size = (60 * ctx.resources.displayMetrics.density).toInt()
+    private val size = (44 * ctx.resources.displayMetrics.density).toInt()
     private val bg = GradientDrawable().apply {
         shape = GradientDrawable.OVAL
         setColor(Color.parseColor("#6D3DF0"))
-        setStroke((3 * ctx.resources.displayMetrics.density).toInt(), Color.WHITE)
+        setStroke((2 * ctx.resources.displayMetrics.density).toInt(), Color.WHITE)
     }
     private val view = TextView(ctx).apply {
         text = "🗣️"
-        textSize = 26f
+        textSize = 19f
         gravity = Gravity.CENTER
         background = bg
         elevation = 12f

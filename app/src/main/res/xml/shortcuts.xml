@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v8 🗣️ 소리와 대화 바로가기 — 앱 아이콘을 길게 누르면 보이고, 바탕화면에 끌어다 놓을 수 있다.
+     누르면 coverfo.com/?sori=talk 를 열고, 화면이 바로 소리 대화를 시작한다 ('소리야' 대기는 켜지 않음). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="talk"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/sc_talk"
+        android:shortcutLongLabel="@string/sc_talk_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="https://coverfo.com/?sori=talk"
+            android:targetPackage="com.coverfo.sori"
+            android:targetClass="com.coverfo.sori.MainActivity" />
+    </shortcut>
+</shortcuts>

@@ -90,6 +90,8 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="coverfosori" android:host="login" />
             </intent-filter>
+            <!-- v8 🗣️ 바로가기: 앱 아이콘을 길게 누르면 '소리와 대화' (바탕화면에 끌어다 놓을 수 있음) → 열리면 바로 대화 시작 -->
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
 
         <!-- v6 ☀️ 아침 브리핑 알림: 알람(앱 안에서만) · 폰 재시작/앱 업데이트 뒤 다시 걸기 -->

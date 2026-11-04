@@ -298,6 +298,8 @@ class SoriService : Service(), WakeListener.Callback {
             /* v7: 지금 있는 나라 · 화면 언어 (화면이 CoverfoApp.setCtx 로 넣어 둔 값 — 없으면 서버가 접속 나라로) */
             val body = JSONObject().put("op", "token").put("name", wakeName(this)).put("store", BuildConfig.STORE).put("relay", 1)
                 .put("country", p.getString("ctxCountry", "") ?: "").put("lang", p.getString("ctxLang", "") ?: "")
+            /* v8: 최근(6시간 안) 길안내한 목적지 → "가는 길에 휴게소 있어?" 에 목적지를 붙여 검색 */
+            if (System.currentTimeMillis() - p.getLong("ctxNaviAt", 0L) < 6 * 3_600_000L) body.put("navi", p.getString("ctxNavi", "") ?: "")
             val (code, j) = post(body.toString())
             if (code != 200 || j == null || j.optString("key").isEmpty()) {
                 val msg = when (code) { 401 -> "로그인 후 사용할 수 있어요"; 402 -> "크레딧이 부족해요"; else -> "연결하지 못했어요" }
@@ -340,6 +342,8 @@ class SoriService : Service(), WakeListener.Callback {
                     return@post
                 }
                 state("live", null)
+                /* v8: '소리야' 로 시작했거나 coverfo 화면이 뒤에 있으면 작은 🗣️ 아이콘을 띄운다 (누르면 대화 화면) */
+                if (MainActivity.current?.resumed != true) showBubble()
                 lastActive = System.currentTimeMillis()
                 main.postDelayed(tick, 60_000)
                 main.postDelayed(idle, 1_000)
@@ -370,6 +374,8 @@ class SoriService : Service(), WakeListener.Callback {
                             main.post { bringToFront(false) }
                             main.postDelayed({ emit(text) }, 700)
                         }
+                        /* v8 웹 검색: 앱이 직접 찾아 답한다 → 내비가 앞에 떠 있어도 coverfo 를 앞으로 가져오지 않는다. 결과는 화면에 번호 단추로 */
+                        "web_search" -> webSearch(ev)
                         "open_app" -> main.post { openApp(ev) }
                         "run_relay", "relay_answer" -> main.post { relay(ev) }
                         "end_conversation" -> {
@@ -396,6 +402,53 @@ class SoriService : Service(), WakeListener.Callback {
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             shutdown("대화를 마쳤어요", null, false)
         }
+    }
+
+    /* ── v8 웹 검색 (/api/talk-live op:"search" · Brave · 무료) ── 결과를 비서에게 돌려주고 화면에도 보낸다 (sori.search) */
+    private fun webSearch(ev: JSONObject) {
+        val callId = ev.optString("call_id")
+        val args = try { JSONObject(ev.optString("arguments", "{}")) } catch (e: Exception) { JSONObject() }
+        val q = args.optString("query").trim().take(150)
+        emit(JSONObject().put("type", "sori.log").put("text", "🔎 검색: $q").toString())
+        Thread {
+            var out: JSONObject
+            try {
+                val p = prefs(this)
+                val body = JSONObject().put("op", "search").put("q", q).put("country", p.getString("ctxCountry", "") ?: "").toString()
+                var (code, j) = post(body)
+                if (code == 401) {
+                    /* 화면 로그인 키(1시간)가 만료됐으면 기기 키로 한 번 더 */
+                    val dev = p.getString("device", "") ?: ""
+                    if (dev.isNotEmpty() && dev != token) {
+                        val req = Request.Builder().url(API)
+                            .header("Authorization", "Bearer $dev")
+                            .post(body.toRequestBody("application/json".toMediaType()))
+                            .build()
+                        http.newCall(req).execute().use { r ->
+                            code = r.code
+                            j = try { JSONObject(r.body?.string() ?: "") } catch (e: Exception) { null }
+                        }
+                    }
+                }
+                val items = j?.optJSONArray("items") ?: JSONArray()
+                out = if (code == 200 && j?.optBoolean("ok") == true) {
+                    val list = JSONArray()
+                    for (i in 0 until items.length()) {
+                        val o = items.optJSONObject(i) ?: continue
+                        list.put(JSONObject().put("n", i + 1).put("title", o.optString("title")).put("site", o.optString("site")).put("snippet", o.optString("desc")))
+                    }
+                    if (items.length() > 0) emit(JSONObject().put("type", "sori.search").put("q", q).put("items", items).toString())
+                    JSONObject().put("ok", true).put("query", q).put("results", list)
+                        .put("note", if (items.length() > 0) "The results are on the coverfo screen as numbered buttons (1~${items.length()})." else "Nothing was found.")
+                } else {
+                    JSONObject().put("ok", false).put("note", when (code) { 401 -> "Not logged in."; else -> j?.optString("error")?.ifBlank { null } ?: "Search failed." })
+                }
+            } catch (e: Exception) {
+                out = JSONObject().put("ok", false).put("note", "Search failed (network).")
+            }
+            val result = out
+            main.post { sendOutput(callId, result, true) }
+        }.start()
     }
 
     /* ② 앱 열기: 이 서비스가 직접 열고 결과를 비서에게 돌려준다 */

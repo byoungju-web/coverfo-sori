@@ -493,6 +493,11 @@ class MainActivity : Activity() {
             return
         }
         if (intent.getBooleanExtra("openChat", false)) js("window.cfLiveOpen&&window.cfLiveOpen()")
+        /* v8 🗣️ 바로가기(소리와 대화): 앱이 이미 열려 있으면 화면을 다시 읽지 않고 바로 대화 시작 (대화 중이면 창만 연다) */
+        if (intent.dataString?.startsWith("https://coverfo.com/?sori=talk") == true) {
+            js("window.cfLiveTalk?window.cfLiveTalk():(location.href='https://coverfo.com/?sori=talk')")
+            return
+        }
         /* v6 ☀️ 아침 브리핑 알림을 누르면: 앱이 이미 열려 있어도 그 주소(coverfo.com/brief?play=1)로 */
         intent.dataString?.takeIf { it.startsWith("https://coverfo.com/") }?.let { web.loadUrl(it) }
     }
@@ -671,10 +676,13 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun setCtx(json: String) {
             val j = try { JSONObject(json) } catch (e: Exception) { JSONObject() }
-            SoriService.prefs(this@MainActivity).edit()
-                .putString("ctxCountry", j.optString("country").uppercase().filter { it in 'A'..'Z' }.take(2))
-                .putString("ctxLang", j.optString("lang").filter { it.isLetter() || it == '-' }.take(8))
-                .apply()
+            val e = SoriService.prefs(this@MainActivity).edit()
+            /* v8: 보낸 값만 바꾼다 (길안내 목적지만 따로 보낼 때 나라·언어가 지워지지 않게) */
+            if (j.has("country")) e.putString("ctxCountry", j.optString("country").uppercase().filter { it in 'A'..'Z' }.take(2))
+            if (j.has("lang")) e.putString("ctxLang", j.optString("lang").filter { it.isLetter() || it == '-' }.take(8))
+            /* v8: 마지막으로 길안내한 목적지 (이 폰에만 · 6시간 동안 소리에게 알려 줌) */
+            if (j.has("navi")) e.putString("ctxNavi", j.optString("navi").replace(Regex("[\\u0000-\\u001f]"), " ").trim().take(60)).putLong("ctxNaviAt", System.currentTimeMillis())
+            e.apply()
         }
 
         @JavascriptInterface
