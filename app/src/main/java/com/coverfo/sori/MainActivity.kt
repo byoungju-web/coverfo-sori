@@ -655,6 +655,28 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun briefState(): String = BriefAlarm.stateJson(this@MainActivity)
 
+        /* v7 ⏰ 알림: 화면(coverfo.com)이 알림을 더하거나 지우면(ask=true), 또 앱을 열 때(ask=false) 부른다
+           → 서버 목록을 받아 이 폰에 알람을 건다 (앱 안에서는 웹 알림이 오지 않아서). 알림 권한이 없으면 ask 일 때 한 번 묻는다 */
+        @JavascriptInterface
+        fun remindSync(token: String, ask: Boolean): String {
+            if (token.isNotBlank() && (SoriService.prefs(this@MainActivity).getString("device", "") ?: "").isEmpty()) fetchDevice(token)
+            RemindAlarm.sync(this@MainActivity, token)
+            if (ask && Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                runOnUiThread { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_BRIEF) }
+            }
+            return "ok"
+        }
+
+        /* v7 세계 어디서나: 화면의 '지금 있는 나라'·'화면 언어'를 소리를 시작할 때 서버에 같이 보낸다 (웹 소리와 같게) */
+        @JavascriptInterface
+        fun setCtx(json: String) {
+            val j = try { JSONObject(json) } catch (e: Exception) { JSONObject() }
+            SoriService.prefs(this@MainActivity).edit()
+                .putString("ctxCountry", j.optString("country").uppercase().filter { it in 'A'..'Z' }.take(2))
+                .putString("ctxLang", j.optString("lang").filter { it.isLetter() || it == '-' }.take(8))
+                .apply()
+        }
+
         @JavascriptInterface
         fun version(): String = try {
             packageManager.getPackageInfo(packageName, 0).versionName ?: ""

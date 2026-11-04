@@ -186,6 +186,9 @@ class BriefReceiver : BroadcastReceiver() {
 class BriefBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val a = intent.action
-        if (a == Intent.ACTION_BOOT_COMPLETED || a == Intent.ACTION_MY_PACKAGE_REPLACED) BriefAlarm.schedule(context.applicationContext, 0)
+        if (a == Intent.ACTION_BOOT_COMPLETED || a == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            BriefAlarm.schedule(context.applicationContext, 0)
+            RemindAlarm.schedule(context.applicationContext)   /* v7 ⏰ 알림도 다시 건다 */
+        }
     }
 }

@@ -294,7 +294,10 @@ class SoriService : Service(), WakeListener.Callback {
 
     private fun connect() {
         try {
+            val p = prefs(this)
+            /* v7: 지금 있는 나라 · 화면 언어 (화면이 CoverfoApp.setCtx 로 넣어 둔 값 — 없으면 서버가 접속 나라로) */
             val body = JSONObject().put("op", "token").put("name", wakeName(this)).put("store", BuildConfig.STORE).put("relay", 1)
+                .put("country", p.getString("ctxCountry", "") ?: "").put("lang", p.getString("ctxLang", "") ?: "")
             val (code, j) = post(body.toString())
             if (code != 200 || j == null || j.optString("key").isEmpty()) {
                 val msg = when (code) { 401 -> "로그인 후 사용할 수 있어요"; 402 -> "크레딧이 부족해요"; else -> "연결하지 못했어요" }
@@ -362,7 +365,7 @@ class SoriService : Service(), WakeListener.Callback {
                     lastActive = System.currentTimeMillis()
                     val name = ev.optString("name")
                     when (name) {
-                        "run_command", "show_chat", "press_button", "run_routine" -> {
+                        "run_command", "show_chat", "press_button", "run_routine", "open_screen", "recall" -> {
                             /* coverfo 화면을 앞으로 → 화면이 명령을 실행(지도·내비 앱 열기 등). 대화는 계속 */
                             main.post { bringToFront(false) }
                             main.postDelayed({ emit(text) }, 700)
