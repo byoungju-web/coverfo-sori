@@ -1,0 +1,54 @@
+# coverfo 화면 도우미 (com.coverfo.soria) — helper 폴더가 바뀌면 설치 파일을 만들어
+# Releases 의 'soria' 에 coverfo-soria.apk 로 올린다 (늘 같은 주소, 시험판 표시).
+#   받는 주소: https://github.com/byoungju-web/coverfo-sori/releases/download/soria/coverfo-soria.apk
+# · 소리 앱 빌드(build.yml)와 따로 돈다. 소리 앱의 '최신(latest)' 주소는 바꾸지 않는다 (--prerelease · --latest=false)
+# · 서명 키는 소리 앱과 같은 비밀값(SORI_KEYSTORE_B64 · SORI_KS_PASS) — 같은 키여야 소리 앱이 도우미에게 일을 시킬 수 있다
+name: build-helper
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'helper/**'
+      - '.github/workflows/helper.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: helper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Signing key
+        env:
+          KS: ${{ secrets.SORI_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then
+            echo "$KS" | base64 -d > "$RUNNER_TEMP/sori.jks"
+            echo "SORI_KEYSTORE=$RUNNER_TEMP/sori.jks" >> "$GITHUB_ENV"
+          fi
+      - name: Build APK
+        env:
+          SORI_KS_PASS: ${{ secrets.SORI_KS_PASS }}
+        run: gradle :soria:assembleRelease --no-daemon --stacktrace
+      - name: Publish to Releases (soria)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp soria/build/outputs/apk/release/soria-release.apk coverfo-soria.apk
+          if ! gh release view soria >/dev/null 2>&1; then
+            gh release create soria --title "coverfo 화면 도우미" --notes "coverfo 소리와 같이 쓰는 화면 도우미 (선택). 폰에서 coverfo-soria.apk 를 눌러 설치" --prerelease --latest=false
+          fi
+          gh release upload soria coverfo-soria.apk --clobber
