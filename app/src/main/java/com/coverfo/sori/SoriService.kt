@@ -302,6 +302,8 @@ class SoriService : Service(), WakeListener.Callback {
                 .put("country", p.getString("ctxCountry", "") ?: "").put("lang", p.getString("ctxLang", "") ?: "")
             /* v8: 최근(6시간 안) 길안내한 목적지 → "가는 길에 휴게소 있어?" 에 목적지를 붙여 검색 */
             if (System.currentTimeMillis() - p.getLong("ctxNaviAt", 0L) < 6 * 3_600_000L) body.put("navi", p.getString("ctxNavi", "") ?: "")
+            /* v10: 화면 도우미가 깔려 있으면 누르기·읽기 도구를 받는다 */
+            if (ScreenHelper.installed(this)) body.put("screen", 1)
             val (code, j) = post(body.toString())
             if (code != 200 || j == null || j.optString("key").isEmpty()) {
                 val msg = when (code) { 401 -> "로그인 후 사용할 수 있어요"; 402 -> "크레딧이 부족해요"; else -> "연결하지 못했어요" }
@@ -381,12 +383,10 @@ class SoriService : Service(), WakeListener.Callback {
                         /* v9 이전 화면: coverfo 가 앞에 있으면 화면이 처리(결과 창 닫기 · 뒤로). 다른 앱(지도·내비)이 앞이면 coverfo 화면으로 돌아온다 (대화 창은 열지 않음) */
                         "go_back" -> {
                             if (MainActivity.current?.resumed == true) emit(text)
-                            else {
-                                main.post { bringToFront(false) }
-                                sendOutput(ev.optString("call_id"), JSONObject().put("ok", true).put("note", "Returned from the other app to the coverfo screen."), false)
-                                emit(JSONObject().put("type", "sori.log").put("text", "▶ 이전 화면 (coverfo)").toString())
-                            }
+                            else main.post { goBackOther(ev) }
                         }
+                        /* v10 🖐 화면 도우미: 다른 앱 화면 누르기 · 읽기 */
+                        "tap_screen", "read_screen" -> main.post { screenTool(ev, text) }
                         "open_app" -> main.post { openApp(ev) }
                         "run_relay", "relay_answer" -> main.post { relay(ev) }
                         "end_conversation" -> {
@@ -460,6 +460,45 @@ class SoriService : Service(), WakeListener.Callback {
             val result = out
             main.post { sendOutput(callId, result, true) }
         }.start()
+    }
+
+    /* ── v10 🖐 화면 도우미 (ScreenHelper → com.coverfo.soria) ── */
+    /* 다른 앱이 앞에 있을 때 "이전 화면": 도우미가 켜져 있으면 그 앱 안에서 뒤로, 아니면 coverfo 화면으로 돌아온다 */
+    private fun goBackOther(ev: JSONObject) {
+        val callId = ev.optString("call_id")
+        ScreenHelper.call(this, "back", "") { j ->
+            if (j.optBoolean("ok")) {
+                sendOutput(callId, JSONObject().put("ok", true).put("note", "Pressed back inside " + j.optString("app", "the app") + "."), false)
+                emit(JSONObject().put("type", "sori.log").put("text", "▶ 이전 화면 (" + j.optString("app", "앱") + ")").toString())
+            } else {
+                bringToFront(false)
+                sendOutput(callId, JSONObject().put("ok", true).put("note", "Returned from the other app to the coverfo screen."), false)
+                emit(JSONObject().put("type", "sori.log").put("text", "▶ 이전 화면 (coverfo)").toString())
+            }
+        }
+    }
+
+    private fun screenTool(ev: JSONObject, raw: String) {
+        val callId = ev.optString("call_id")
+        val name = ev.optString("name")
+        val args = try { JSONObject(ev.optString("arguments", "{}")) } catch (e: Exception) { JSONObject() }
+        val t = args.optString("text").trim()
+        /* coverfo 화면이 앞이면: 누르기는 화면의 결과 단추 누르기(press_button)로, 읽기는 안내만 */
+        if (MainActivity.current?.resumed == true) {
+            if (name == "tap_screen") {
+                emit(JSONObject(raw).put("name", "press_button").put("arguments", JSONObject().put("label", t).toString()).toString())
+            } else {
+                sendOutput(callId, JSONObject().put("ok", false).put("note", "The coverfo screen is in front; read_screen reads other apps only."), true)
+            }
+            return
+        }
+        val op = if (name == "tap_screen") "tap" else "read"
+        if (op == "tap") emit(JSONObject().put("type", "sori.log").put("text", "🖐 누르기: $t").toString())
+        ScreenHelper.call(this, op, t) { j ->
+            sendOutput(callId, j, true)
+            if (op == "tap") emit(JSONObject().put("type", "sori.log").put("text", if (j.optBoolean("ok")) "▶ 누름: " + j.optString("pressed", t) else "⚠️ 누르지 못했어요: $t").toString())
+            else if (j.optBoolean("ok")) emit(JSONObject().put("type", "sori.log").put("text", "👀 화면 읽음 (" + j.optString("app") + ")").toString())
+        }
     }
 
     /* ② 앱 열기: 이 서비스가 직접 열고 결과를 비서에게 돌려준다 */

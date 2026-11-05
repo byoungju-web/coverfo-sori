@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">coverfo 화면 도우미</string>
+    <string name="a11y_label">coverfo 화면 도우미</string>
+    <string name="a11y_desc">coverfo 소리에게 말로 시킬 때만 동작해요. 지금 보이는 앱 화면에서 말한 글자(예: 양양방향)를 찾아 대신 누르고, 뒤로 가고, 물어본 화면 글자를 읽어 소리에게 전해요. 화면 내용은 저장하거나 인터넷으로 보내지 않아요(읽은 글자는 그 질문에 답할 때만 소리 대화로 전달). 결제·구매·송금·보내기·삭제 단추는 누르지 않아요.</string>
+</resources>

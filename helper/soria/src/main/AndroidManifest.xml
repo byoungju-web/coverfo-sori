@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- coverfo 화면 도우미 (com.coverfo.soria · v1)
+     · coverfo 소리 앱이 시킬 때만: 지금 앞에 있는 앱 화면의 글자를 찾아 누르기 · 뒤로 · 보이는 글자 읽기 (접근성 서비스)
+     · 소리 앱과 같은 서명 키로 만든 앱만 일을 시킬 수 있다 (signature 권한). 화면 내용은 저장하거나 인터넷으로 보내지 않는다 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 소리 앱(같은 서명)만 이 도우미에게 명령을 보낼 수 있게. 소리 앱도 같은 권한을 정의해 두어 설치 순서와 상관없이 맞물린다 -->
+    <permission
+        android:name="com.coverfo.soria.CONTROL"
+        android:label="coverfo 화면 도우미에게 일 시키기"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.coverfo.soria.CONTROL" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".ScreenService"
+            android:exported="true"
+            android:label="@string/a11y_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/screen_helper" />
+        </service>
+
+        <!-- 소리 앱 → 도우미 명령 (같은 서명의 앱만 보낼 수 있음) -->
+        <receiver
+            android:name=".CmdReceiver"
+            android:exported="true"
+            android:permission="com.coverfo.soria.CONTROL">
+            <intent-filter>
+                <action android:name="com.coverfo.soria.CMD" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

@@ -12,9 +12,18 @@
     <!-- v6 ☀️ 아침 브리핑: 폰을 다시 켜면 알림 알람을 다시 건다 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- v10 🖐 화면 도우미(따로 설치하는 앱 com.coverfo.soria)에게 일 시키기: 같은 서명 키의 앱끼리만.
+         도우미도 같은 권한을 정의해 두어 어느 쪽을 먼저 설치해도 맞물린다 -->
+    <permission
+        android:name="com.coverfo.soria.CONTROL"
+        android:label="coverfo 화면 도우미에게 일 시키기"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.coverfo.soria.CONTROL" />
+
     <!-- 카카오내비 설치 여부 확인 (안드로이드 11+ 앱 목록 보기 제한) -->
     <!-- v4 ② "카톡 켜 줘" 처럼 말로 열 수 있는 앱 (AppLauncher.KNOWN 과 같은 목록) + 기본 기능(카메라·전화·문자 등) -->
     <queries>
+        <package android:name="com.coverfo.soria" />
         <package android:name="com.locnall.KimGiSa" />
         <package android:name="com.kakao.talk" />
         <package android:name="com.google.android.youtube" />
