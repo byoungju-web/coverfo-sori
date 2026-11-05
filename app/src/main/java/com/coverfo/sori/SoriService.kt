@@ -234,6 +234,8 @@ class SoriService : Service(), WakeListener.Callback {
     }
 
     override fun onWake() {
+        /* v9: '소리야' 가 들리면 바로 coverfo 소리 창을 앞으로 (다른 앱 위에 표시 권한이 있으면 다른 앱을 보는 중에도) */
+        main.post { bringToFront(true) }
         try {
             val tg = ToneGenerator(AudioManager.STREAM_MUSIC, 60)
             tg.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
@@ -376,6 +378,15 @@ class SoriService : Service(), WakeListener.Callback {
                         }
                         /* v8 웹 검색: 앱이 직접 찾아 답한다 → 내비가 앞에 떠 있어도 coverfo 를 앞으로 가져오지 않는다. 결과는 화면에 번호 단추로 */
                         "web_search" -> webSearch(ev)
+                        /* v9 이전 화면: coverfo 가 앞에 있으면 화면이 처리(결과 창 닫기 · 뒤로). 다른 앱(지도·내비)이 앞이면 coverfo 화면으로 돌아온다 (대화 창은 열지 않음) */
+                        "go_back" -> {
+                            if (MainActivity.current?.resumed == true) emit(text)
+                            else {
+                                main.post { bringToFront(false) }
+                                sendOutput(ev.optString("call_id"), JSONObject().put("ok", true).put("note", "Returned from the other app to the coverfo screen."), false)
+                                emit(JSONObject().put("type", "sori.log").put("text", "▶ 이전 화면 (coverfo)").toString())
+                            }
+                        }
                         "open_app" -> main.post { openApp(ev) }
                         "run_relay", "relay_answer" -> main.post { relay(ev) }
                         "end_conversation" -> {

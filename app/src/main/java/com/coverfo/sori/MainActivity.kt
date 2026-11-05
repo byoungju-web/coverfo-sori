@@ -504,6 +504,17 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
+        /* v9: 화면에 열린 소리 대화 창 · 결과 창이 있으면 먼저 하나씩 닫는다 (window.cfLiveBack). 없으면 예전처럼 뒤로 */
+        try {
+            web.evaluateJavascript("(window.cfLiveBack&&window.cfLiveBack())?1:0") { r ->
+                if (r != "1") backDefault()
+            }
+        } catch (e: Exception) {
+            backDefault()
+        }
+    }
+
+    private fun backDefault() {
         if (web.canGoBack()) web.goBack() else {
             @Suppress("DEPRECATION")
             super.onBackPressed()
