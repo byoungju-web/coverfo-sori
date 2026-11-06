@@ -398,6 +398,13 @@ class SoriService : Service(), WakeListener.Callback {
                         else -> emit(text)
                     }
                 }
+                /* v11: 대화 중(아이콘으로 작게 · 다른 앱을 보는 중)에 이름만 부르면("소리야") coverfo 소리 창을 앞으로.
+                   대화 중에는 '소리야' 대기(폰 안 인식)가 꺼져 있어서, 대화 받아쓰기로 알아본다 */
+                "conversation.item.input_audio_transcription.completed" -> {
+                    val said = ev.optString("transcript")
+                    if (nameOnly(said)) main.post { bringToFront(true) }
+                    emit(text)
+                }
                 else -> {
                     if (type.startsWith("response.")) lastActive = System.currentTimeMillis()
                     if (type.endsWith(".delta") && type.contains("audio") && !type.contains("transcript")) return
@@ -460,6 +467,17 @@ class SoriService : Service(), WakeListener.Callback {
             val result = out
             main.post { sendOutput(callId, result, true) }
         }.start()
+    }
+
+    /* v11: 받아쓴 말이 거의 이름뿐인지 ("소리야", "소리야?", "소리야 거기 있어") — 긴 명령은 그대로 대화가 처리 */
+    private fun nameOnly(said: String): Boolean {
+        val t = said.filter { it.isLetterOrDigit() }
+        if (t.isEmpty() || t.length > 12) return false
+        val names = listOf(wakeName(this)) + wakeAlts(this)
+        return names.any { n ->
+            val k = n.filter { it.isLetterOrDigit() }
+            k.isNotEmpty() && t.startsWith(k) && t.length <= k.length + 5
+        } || WakeMatch.hit(t.take(6), names) && t.length <= 8
     }
 
     /* ── v10 🖐 화면 도우미 (ScreenHelper → com.coverfo.soria) ── */
