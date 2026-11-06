@@ -24,7 +24,7 @@ object ScreenHelper {
         true
     } catch (e: Exception) { false }
 
-    /** cb 는 메인 스레드에서 한 번만 불린다 (4초 안에 답이 없으면 실패로) */
+    /** cb 는 메인 스레드에서 한 번만 불린다 (7초 안에 답이 없으면 실패로 — v12: 도우미가 목록을 넘기며 찾을 시간) */
     fun call(ctx: Context, op: String, text: String, cb: (JSONObject) -> Unit) {
         if (!installed(ctx)) {
             cb(JSONObject().put("ok", false).put("missing", true)
@@ -47,6 +47,6 @@ object ScreenHelper {
             finish(JSONObject().put("ok", false).put("note", "Could not reach the screen helper."))
             return
         }
-        main.postDelayed({ finish(JSONObject().put("ok", false).put("note", "The screen helper did not answer in time.")) }, 4_000)
+        main.postDelayed({ finish(JSONObject().put("ok", false).put("note", "The screen helper did not answer in time.")) }, 7_000)
     }
 }

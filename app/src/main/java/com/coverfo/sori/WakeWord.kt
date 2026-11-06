@@ -208,6 +208,11 @@ class WakeListener(private val ctx: Context, private val cb: Callback) {
         }
     }
 
+    /** v12: 이름을 들었으면 뒤의 말을 기다리지 않고 바로 '연결 중'(계속 모음 · 20초)으로. onWake 안에서 부른다 */
+    fun armNow() {
+        synchronized(lock) { if (state == 1) state = 2 }
+    }
+
     /** 연결이 안 되었으면 다시 이름 기다리기 */
     fun cancelCommand() {
         synchronized(lock) { cmd = null; state = 0 }

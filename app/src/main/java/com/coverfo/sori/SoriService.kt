@@ -234,8 +234,11 @@ class SoriService : Service(), WakeListener.Callback {
     }
 
     override fun onWake() {
-        /* v9: '소리야' 가 들리면 바로 coverfo 소리 창을 앞으로 (다른 앱 위에 표시 권한이 있으면 다른 앱을 보는 중에도) */
-        main.post { bringToFront(true) }
+        /* v12: '소리야' 가 들리면 뒤의 말을 기다리지 않고 바로 대화를 시작하고, coverfo 홈을 앞으로 (대화 창은 접힌 채 🟣 아이콘).
+           그동안 들은 말(이름 + 이어서 한 말)은 연결되면 그대로 대화로 보낸다. 시작할 때 첫 1분 크레딧이 든다 */
+        wake?.armNow()
+        main.post { if (!running) bringToFront(false) }
+        onCommand()
         try {
             val tg = ToneGenerator(AudioManager.STREAM_MUSIC, 60)
             tg.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
@@ -386,7 +389,7 @@ class SoriService : Service(), WakeListener.Callback {
                             else main.post { goBackOther(ev) }
                         }
                         /* v10 🖐 화면 도우미: 다른 앱 화면 누르기 · 읽기 */
-                        "tap_screen", "read_screen" -> main.post { screenTool(ev, text) }
+                        "tap_screen", "read_screen", "scroll_screen" -> main.post { screenTool(ev, text) }
                         "open_app" -> main.post { openApp(ev) }
                         "run_relay", "relay_answer" -> main.post { relay(ev) }
                         "end_conversation" -> {
@@ -500,18 +503,31 @@ class SoriService : Service(), WakeListener.Callback {
         val callId = ev.optString("call_id")
         val name = ev.optString("name")
         val args = try { JSONObject(ev.optString("arguments", "{}")) } catch (e: Exception) { JSONObject() }
-        val t = args.optString("text").trim()
+        val t = if (name == "scroll_screen") (if (args.optString("direction") == "up") "up" else "down") else args.optString("text").trim()
         /* coverfo 화면이 앞이면: 누르기는 화면의 결과 단추 누르기(press_button)로, 읽기는 안내만 */
         if (MainActivity.current?.resumed == true) {
             if (name == "tap_screen") {
                 emit(JSONObject(raw).put("name", "press_button").put("arguments", JSONObject().put("label", t).toString()).toString())
             } else {
-                sendOutput(callId, JSONObject().put("ok", false).put("note", "The coverfo screen is in front; read_screen reads other apps only."), true)
+                sendOutput(callId, JSONObject().put("ok", false).put("note", "The coverfo screen is in front; read_screen / scroll_screen work on other apps only."), true)
             }
             return
         }
-        val op = if (name == "tap_screen") "tap" else "read"
+        val op = when (name) { "tap_screen" -> "tap"; "scroll_screen" -> "scroll"; else -> "read" }
         if (op == "tap") emit(JSONObject().put("type", "sori.log").put("text", "🖐 누르기: $t").toString())
+        if (op == "scroll") {
+            /* v12: 넘긴 뒤 0.7초 기다려 보이는 글자를 같이 돌려준다 → 소리가 목록 이름을 말해 줄 수 있게 */
+            ScreenHelper.call(this, "scroll", t) { j ->
+                if (!j.optBoolean("ok")) { sendOutput(callId, j, true); return@call }
+                emit(JSONObject().put("type", "sori.log").put("text", if (t == "up") "▲ 위로 넘김" else "▼ 아래로 넘김").toString())
+                main.postDelayed({
+                    ScreenHelper.call(this, "read", "") { r ->
+                        sendOutput(callId, j.put("text", r.optString("text")), true)
+                    }
+                }, 700)
+            }
+            return
+        }
         ScreenHelper.call(this, op, t) { j ->
             sendOutput(callId, j, true)
             if (op == "tap") emit(JSONObject().put("type", "sori.log").put("text", if (j.optBoolean("ok")) "▶ 누름: " + j.optString("pressed", t) else "⚠️ 누르지 못했어요: $t").toString())
