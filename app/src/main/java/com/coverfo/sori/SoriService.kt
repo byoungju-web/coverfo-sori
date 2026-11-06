@@ -113,6 +113,8 @@ class SoriService : Service(), WakeListener.Callback {
             }
             "wake_off" -> {
                 wakeOn = false
+                keepIcon = false
+                hideBubble()
                 prefs(this).edit().putBoolean("wakeOn", false).apply()
                 stopWake()
                 wakeEmit("off", null)
@@ -149,6 +151,8 @@ class SoriService : Service(), WakeListener.Callback {
 
     private fun beginLive() {
         running = true
+        keepIcon = false
+        bubble?.standby(false)
         tickRetried = false
         lastActive = System.currentTimeMillis()
         startFg()
@@ -869,9 +873,26 @@ class SoriService : Service(), WakeListener.Callback {
 
     fun showBubble() {
         main.post {
-            if (!running || bubble != null || !Settings.canDrawOverlays(this)) return@post
-            bubble = Bubble(this) { bringToFront(true) }.also { it.show(); it.speaking(playing) }
+            if ((!running && !keepIcon) || bubble != null || !Settings.canDrawOverlays(this)) return@post
+            /* v15: 대화 중이면 누르면 대화 화면, 대기 모양이면 누르면 바로 다시 대화 */
+            bubble = Bubble(this) { if (running) bringToFront(true) else talkFront() }.also {
+                it.show()
+                if (running) it.speaking(playing) else it.standby(true)
+            }
         }
+    }
+
+    /* v15: '말이 없어서' 대화가 끝나도 아이콘은 대기 모양으로 남긴다 ("들어가"·끝내기로 끝내면 사라짐) */
+    @Volatile private var keepIcon = false
+
+    /** 대기 아이콘을 누르면: coverfo 를 열고 바로 대화 시작 (바로가기와 같은 주소 → 화면이 cfLiveTalk) */
+    private fun talkFront() {
+        try {
+            startActivity(Intent(this, MainActivity::class.java)
+                .setAction(Intent.ACTION_VIEW)
+                .setData(android.net.Uri.parse("https://coverfo.com/?sori=talk"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        } catch (e: Exception) { bringToFront(true) }
     }
 
     fun hideBubble() {
@@ -905,8 +926,9 @@ class SoriService : Service(), WakeListener.Callback {
                 }
                 am.mode = AudioManager.MODE_NORMAL
             } catch (e: Exception) { }
-            bubble?.hide()
-            bubble = null
+            /* v15: 말이 없어 대기로 돌아갔거나 연결이 끊긴 것이면 아이콘은 대기 모양으로 남긴다 */
+            keepIcon = wakeOn && (msg.contains("대기로 돌아갔") || msg.contains("연결이 끊겼"))
+            if (keepIcon && bubble != null) bubble?.standby(true) else { bubble?.hide(); bubble = null }
             val j = JSONObject()
             j.put("msg", msg)
             if (error != null) j.put("error", error.take(200))

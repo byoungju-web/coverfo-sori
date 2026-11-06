@@ -94,6 +94,14 @@ class Bubble(private val ctx: Context, private val onTap: () -> Unit) {
         shown = false
     }
 
+    /** v15: 대화는 끝났지만 아이콘은 남아 있는 '대기' 모양 (회색) — 누르면 다시 대화 */
+    fun standby(on: Boolean) {
+        main.post {
+            bg.setColor(Color.parseColor(if (on) "#8E8AA0" else "#6D3DF0"))
+            view.alpha = if (on) 0.85f else 1f
+        }
+    }
+
     fun speaking(on: Boolean) {
         main.post { bg.setColor(Color.parseColor(if (on) "#E548A8" else "#6D3DF0")) }
     }
