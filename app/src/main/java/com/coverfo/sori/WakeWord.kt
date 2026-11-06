@@ -271,7 +271,8 @@ class WakeListener(private val ctx: Context, private val cb: Callback) {
             var speech = 0
             while (run) {
                 val n = ar.read(buf, 0, buf.size)
-                if (n <= 0) { if (n < 0) break else continue }
+                /* v14: 마이크가 끊기면(다른 앱이 마이크를 가져감 · 오디오 서버 재시작 등) 조용히 멈추지 않고 오류로 알린다 → 서비스가 다시 켠다 */
+                if (n <= 0) { if (n < 0) throw IOException("마이크가 끊겼어요 ($n)") else continue }
                 val level = rms(buf, n)
                 val now = System.currentTimeMillis()
                 synchronized(lock) {

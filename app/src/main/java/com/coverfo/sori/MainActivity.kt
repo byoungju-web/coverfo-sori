@@ -456,6 +456,9 @@ class MainActivity : Activity() {
         if (SoriService.prefs(this).getBoolean("wakeOn", false) && SoriService.instance == null &&
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             startWakeService()
+        } else {
+            /* v14: coverfo 화면이 보이면 '소리야' 대기가 멈춰 있지 않은지 확인하고 다시 켠다 */
+            try { SoriService.instance?.ensureWake() } catch (e: Exception) { }
         }
         /* '권한 설정' 에서 돌아왔으면(허용 여부와 상관없이) 시작 */
         if (waitOverlay) {

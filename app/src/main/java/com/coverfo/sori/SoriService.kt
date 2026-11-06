@@ -124,6 +124,7 @@ class SoriService : Service(), WakeListener.Callback {
                 prefs(this).edit().putBoolean("wakeOn", true).apply()
                 startFg(true)
                 if (!running) ensureModelThenListen()
+                ensureWake()
                 return START_NOT_STICKY
             }
             "wake_test" -> {
@@ -234,6 +235,7 @@ class SoriService : Service(), WakeListener.Callback {
     }
 
     override fun onWake() {
+        wakeErrors = 0
         /* v12: '소리야' 가 들리면 뒤의 말을 기다리지 않고 바로 대화를 시작하고, coverfo 홈을 앞으로 (대화 창은 접힌 채 🟣 아이콘).
            그동안 들은 말(이름 + 이어서 한 말)은 연결되면 그대로 대화로 보낸다. 시작할 때 첫 1분 크레딧이 든다 */
         wake?.armNow()
@@ -274,7 +276,26 @@ class SoriService : Service(), WakeListener.Callback {
         main.post {
             wake = null
             wakeEmit("error", JSONObject().put("msg", msg))
+            /* v14: 대기가 오류로 멈추면 잠시 뒤 다시 켠다 (3초 → 6 → 12 → 24 → 48초, 이후 60초마다) */
+            wakeErrors++
+            val delay = minOf(60_000L, 3_000L shl minOf(wakeErrors - 1, 4))
+            main.postDelayed({ ensureWake() }, delay)
         }
+    }
+
+    /* v14: '소리야' 대기가 켜져 있어야 하는데 멈춰 있으면 다시 켠다 (coverfo 화면이 보일 때 · 30초마다 확인) */
+    @Volatile private var wakeErrors = 0
+    private var watchOn = false
+    private val watch = object : Runnable {
+        override fun run() {
+            ensureWake()
+            if (wakeOn) main.postDelayed(this, 30_000L) else watchOn = false
+        }
+    }
+
+    fun ensureWake() {
+        if (wakeOn && !running && wake?.running != true) ensureModelThenListen()
+        if (wakeOn && !watchOn) { watchOn = true; main.postDelayed(watch, 30_000L) }
     }
 
     private fun wakeEmit(s: String, extra: JSONObject?) {
