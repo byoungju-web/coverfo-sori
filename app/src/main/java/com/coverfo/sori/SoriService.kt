@@ -376,7 +376,8 @@ class SoriService : Service(), WakeListener.Callback {
                     lastActive = System.currentTimeMillis()
                     val name = ev.optString("name")
                     when (name) {
-                        "run_command", "show_chat", "press_button", "run_routine", "open_screen", "recall" -> {
+                        /* v13: place_list(장소 목록)도 coverfo 화면에 띄우므로 앞으로 */
+                        "run_command", "show_chat", "press_button", "run_routine", "open_screen", "recall", "place_list" -> {
                             /* coverfo 화면을 앞으로 → 화면이 명령을 실행(지도·내비 앱 열기 등). 대화는 계속 */
                             main.post { bringToFront(false) }
                             main.postDelayed({ emit(text) }, 700)
