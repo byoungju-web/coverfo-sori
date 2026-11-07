@@ -252,6 +252,13 @@ class WakeListener(private val ctx: Context, private val cb: Callback) {
         return if (c == 0) 0.0 else sqrt(s / c)
     }
 
+    /** 말이 끝난 결과: {"text":…} 또는 후보 여러 개 {"alternatives":[{"text":…},…]} */
+    private fun finals(json: String): List<String> {
+        val j = JSONObject(json)
+        val a = j.optJSONArray("alternatives") ?: return listOf(j.optString("text"))
+        return (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("text") }
+    }
+
     @SuppressLint("MissingPermission")
     private fun loop() {
         var model: Model? = null
@@ -261,6 +268,8 @@ class WakeListener(private val ctx: Context, private val cb: Callback) {
             try { LibVosk.setLogLevel(LogLevel.WARNINGS) } catch (e: Throwable) { }
             model = Model(VoskStore.dir(ctx).absolutePath)
             rec = Recognizer(model, RATE.toFloat())
+            /* v16: 말이 끝났을 때 후보 3개까지 받아 그중 하나라도 이름이면 깨운다 (처음 부를 때 놓치는 것 줄이기) */
+            try { rec.javaClass.getMethod("setMaxAlternatives", Int::class.javaPrimitiveType).invoke(rec, 3) } catch (e: Throwable) { }
             val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             ar = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE, AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT, max(min, RATE))
@@ -282,11 +291,12 @@ class WakeListener(private val ctx: Context, private val cb: Callback) {
                     0 -> {
                         if (level < noise * 1.5) noise = noise * 0.95 + level * 0.05      // 조용할 때 바닥 소음을 천천히 따라감
                         val fin = rec.acceptWaveForm(buf, n)
-                        val text = try {
-                            if (fin) JSONObject(rec.getResult()).optString("text") else JSONObject(rec.getPartialResult()).optString("partial")
-                        } catch (e: Exception) { "" }
+                        val alts = try {
+                            if (fin) finals(rec.getResult()) else listOf(JSONObject(rec.getPartialResult()).optString("partial"))
+                        } catch (e: Exception) { emptyList() }
+                        val text = alts.firstOrNull { it.isNotBlank() } ?: ""
                         if (text.isBlank()) continue
-                        val hit = WakeMatch.hit(text, names)
+                        val hit = alts.any { it.isNotBlank() && WakeMatch.hit(it, names) }
                         if (test) {
                             if (fin) cb.onHeard(text, hit)
                             continue
