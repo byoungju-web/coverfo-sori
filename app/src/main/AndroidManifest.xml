@@ -61,8 +61,6 @@
         <package android:name="com.korail.talk" />
         <intent><action android:name="android.media.action.STILL_IMAGE_CAMERA" /></intent>
         <intent><action android:name="android.intent.action.DIAL" /></intent>
-        <!-- v16 대화 받아쓰기: 폰 기본 음성 인식(구글) 서비스를 찾을 수 있게 (안드로이드 11+) -->
-        <intent><action android:name="android.speech.RecognitionService" /></intent>
         <intent><action android:name="android.intent.action.SHOW_ALARMS" /></intent>
         <intent><action android:name="android.settings.SETTINGS" /></intent>
         <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.APP_MESSAGING" /></intent>

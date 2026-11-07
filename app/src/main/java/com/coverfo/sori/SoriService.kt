@@ -52,8 +52,6 @@ import java.util.concurrent.TimeUnit
  * · v5 커넥션 허브 2.0: run_relay · relay_answer 를 이 서비스가 /api/hub 로 직접 실행 (캘린더→드라이브→요약 문서→메일·카톡).
  *   남에게 보내기 전에는 서버가 status "confirm" 을 돌려주고, 비서가 말로 묻고, 대답(relay_answer)을 다시 서버로 보낸다.
  *   끝나면 카톡 보내기는 KakaoSend (1탭 / APK판은 자동 보내기)로 폰에서 한다.
- * · v16 받아쓰기: 대화 중 내 말은 폰 기본 음성 인식(구글 · coverfo 웹 🎙 와 같은 엔진)으로 받아써서 글로 보낸다 (GoogleStt).
- *   소리가 말하는 동안은 듣기를 멈춘다. 이 폰에서 쓸 수 없으면 예전 방식(마이크 소리를 그대로 보내기)으로.
  */
 class SoriService : Service(), WakeListener.Callback {
 
@@ -99,12 +97,6 @@ class SoriService : Service(), WakeListener.Callback {
     private var fgStarted = false
     @Volatile private var relayBusy = false        // v5 릴레이 실행 중 (그동안은 '말이 없어 대기로' 하지 않는다)
     @Volatile private var relayState: String? = null   // v5 보내기 확인을 기다리는 중인 서버 상태
-    /* v16 구글 받아쓰기 */
-    private var stt: GoogleStt? = null
-    @Volatile private var gMode = false            // 이번 대화는 구글 받아쓰기로
-    @Volatile private var preHold = false          // '소리야 + 명령' 으로 깨운 첫 말을 처리하는 동안 받아쓰기 잠깐 멈춤
-    @Volatile private var preSpeech = false
-    @Volatile private var responding = false       // 소리가 대답을 만드는 중 (response.created ~ response.done)
     private val hubHttp = OkHttpClient.Builder()
         .callTimeout(170, TimeUnit.SECONDS)
         .readTimeout(170, TimeUnit.SECONDS)
@@ -358,10 +350,6 @@ class SoriService : Service(), WakeListener.Callback {
     private inner class Listener : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
             /* 이름을 듣고 연결했으면: 대기용 마이크를 놓고, 그동안 들은 말(16kHz)을 24kHz 로 바꿔 먼저 보낸다 */
-            gMode = GoogleStt.available(this@SoriService)
-            preHold = false
-            preSpeech = false
-            responding = false
             val w = wake
             if (w != null) {
                 val pre = w.takeAndStop()
@@ -377,12 +365,6 @@ class SoriService : Service(), WakeListener.Callback {
                         try { webSocket.send("{\"type\":\"input_audio_buffer.append\",\"audio\":\"$b64\"}") } catch (x: Exception) { }
                         i = e
                     }
-                    /* v16 구글 받아쓰기면 마이크 소리를 더 보내지 않으므로, 끝에 1.2초 조용한 소리를 붙여 '말이 끝났다'를 알게 한다 */
-                    if (gMode) {
-                        val z = Base64.encodeToString(ByteArray(RATE / 10 * 2), Base64.NO_WRAP)
-                        for (k in 0 until 12) try { webSocket.send("{\"type\":\"input_audio_buffer.append\",\"audio\":\"$z\"}") } catch (x: Exception) { }
-                        preHold = true
-                    }
                 }
             }
             main.post {
@@ -397,8 +379,6 @@ class SoriService : Service(), WakeListener.Callback {
                 lastActive = System.currentTimeMillis()
                 main.postDelayed(tick, 60_000)
                 main.postDelayed(idle, 1_000)
-                /* v16: 깨울 때 같이 한 말이 없었으면(2.5초 안에 말소리 없음) 바로 구글 받아쓰기 시작 */
-                if (preHold) main.postDelayed({ if (preHold && !preSpeech) { preHold = false; syncHold() } }, 2_500)
             }
         }
 
@@ -414,7 +394,6 @@ class SoriService : Service(), WakeListener.Callback {
                 }
                 "input_audio_buffer.speech_started" -> {
                     lastActive = System.currentTimeMillis()
-                    if (preHold) preSpeech = true
                     clearPlayback()
                     emit(text)
                 }
@@ -424,6 +403,8 @@ class SoriService : Service(), WakeListener.Callback {
                     when (name) {
                         /* v13: place_list(장소 목록)도 coverfo 화면에 띄우므로 앞으로 */
                         "run_command", "show_chat", "press_button", "run_routine", "open_screen", "recall", "place_list" -> {
+                            /* v17: 이 명령으로 다른 앱(내비·지도 등)이 열리면 그 앱 위에만 🗣️ 아이콘 */
+                            if (name == "run_command" || name == "press_button" || name == "place_list") cmdAt = System.currentTimeMillis()
                             /* coverfo 화면을 앞으로 → 화면이 명령을 실행(지도·내비 앱 열기 등). 대화는 계속 */
                             main.post { bringToFront(false) }
                             main.postDelayed({ emit(text) }, 700)
@@ -457,11 +438,6 @@ class SoriService : Service(), WakeListener.Callback {
                 }
                 else -> {
                     if (type.startsWith("response.")) lastActive = System.currentTimeMillis()
-                    if (type == "response.created") responding = true
-                    if (type == "response.done") {
-                        responding = false
-                        if (preHold) { preHold = false; syncHold() }
-                    }
                     if (type.endsWith(".delta") && type.contains("audio") && !type.contains("transcript")) return
                     emit(text)
                 }
@@ -593,6 +569,7 @@ class SoriService : Service(), WakeListener.Callback {
         val name = args.optString("name")
         val r = AppLauncher.open(this, name, BuildConfig.STORE, MainActivity.current?.resumed == true)
         val ok = r.optBoolean("ok")
+        if (ok) { cmdAt = System.currentTimeMillis(); if (MainActivity.current?.resumed != true) showBubble() }
         sendOutput(ev.optString("call_id"), r, !ok)          // 못 열었으면 비서가 짧게 알려 주도록
         emit(JSONObject().put("type", "sori.log").put("text", (if (ok) "▶ 앱 열기: " else "⚠️ 앱을 열지 못했어요: ") + r.optString("app", name)).toString())
     }
@@ -762,42 +739,6 @@ class SoriService : Service(), WakeListener.Callback {
         am.mode = AudioManager.MODE_IN_COMMUNICATION
         routeOutput(am)
 
-        val outMin = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val at = AudioTrack.Builder()
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-            .setAudioFormat(AudioFormat.Builder().setSampleRate(RATE).setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
-            .setBufferSizeInBytes(maxOf(outMin, RATE))
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
-        track = at
-        at.play()
-
-        /* v16: 내 말은 구글 받아쓰기로 (안 되면 예전처럼 마이크 소리를 그대로 보낸다) */
-        if (gMode && startGoogle()) {
-            emit(JSONObject().put("type", "sori.log").put("text", "🎙 받아쓰기: 폰 음성 인식(구글)").toString())
-        } else {
-            gMode = false
-            preHold = false
-            if (!startMic()) { try { at.stop(); at.release() } catch (e: Exception) { }; track = null; return false }
-        }
-
-        Thread {
-            while (running) {
-                val c = try { playQ.poll(250, TimeUnit.MILLISECONDS) } catch (e: Exception) { null }
-                if (c == null) {
-                    if (playing) { playing = false; lastActive = System.currentTimeMillis(); emit("{\"type\":\"output_audio_buffer.stopped\"}"); bubble?.speaking(false); syncHold() }
-                    continue
-                }
-                if (!playing) { playing = true; emit("{\"type\":\"output_audio_buffer.started\"}"); bubble?.speaking(true); syncHold() }
-                try { track?.write(c, 0, c.size) } catch (e: Exception) { }
-            }
-        }.start()
-        return true
-    }
-
-    /* 예전 방식: 마이크 소리(24kHz)를 그대로 음성 대화로 보낸다 (OpenAI 가 받아쓰기) */
-    @SuppressLint("MissingPermission")
-    private fun startMic(): Boolean {
         /* 마이크: 통화용(에코 제거) 24kHz. 기기가 못 하면 48kHz 로 받아 반으로 줄인다 */
         for (r in intArrayOf(RATE, 48000)) {
             val min = AudioRecord.getMinBufferSize(r, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -814,6 +755,15 @@ class SoriService : Service(), WakeListener.Callback {
         try { if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(ar.audioSessionId)?.setEnabled(true) } catch (e: Exception) { }
         try { if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(ar.audioSessionId)?.setEnabled(true) } catch (e: Exception) { }
 
+        val outMin = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val at = AudioTrack.Builder()
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            .setAudioFormat(AudioFormat.Builder().setSampleRate(RATE).setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+            .setBufferSizeInBytes(maxOf(outMin, RATE))
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+        track = at
+        at.play()
         ar.startRecording()
 
         Thread {
@@ -828,47 +778,18 @@ class SoriService : Service(), WakeListener.Callback {
             }
         }.start()
 
+        Thread {
+            while (running) {
+                val c = try { playQ.poll(250, TimeUnit.MILLISECONDS) } catch (e: Exception) { null }
+                if (c == null) {
+                    if (playing) { playing = false; lastActive = System.currentTimeMillis(); emit("{\"type\":\"output_audio_buffer.stopped\"}"); bubble?.speaking(false) }
+                    continue
+                }
+                if (!playing) { playing = true; emit("{\"type\":\"output_audio_buffer.started\"}"); bubble?.speaking(true) }
+                try { track?.write(c, 0, c.size) } catch (e: Exception) { }
+            }
+        }.start()
         return true
-    }
-
-    /* ── v16 구글 받아쓰기 ── */
-    private fun startGoogle(): Boolean {
-        val g = GoogleStt(this, GoogleStt.langTag(prefs(this).getString("ctxLang", "") ?: ""), object : GoogleStt.Cb {
-            override fun onBegin() {
-                lastActive = System.currentTimeMillis()
-                emit("{\"type\":\"input_audio_buffer.speech_started\"}")
-            }
-            override fun onText(text: String) {
-                if (!running) return
-                lastActive = System.currentTimeMillis()
-                emit("{\"type\":\"input_audio_buffer.speech_stopped\"}")
-                /* 화면 대화 기록 · 명령 확인(내가 한 말)에 쓰도록 받아쓴 말을 화면에도 (예전 받아쓰기 알림과 같은 모양) */
-                emit(JSONObject().put("type", "conversation.item.input_audio_transcription.completed").put("transcript", text).put("stt", "google").toString())
-                if (nameOnly(text)) bringToFront(true)
-                /* 소리가 아직 대답을 만드는 중이면 그 대답은 멈추고 새 말에 대답 (예전에 말을 걸면 끊기던 것과 같게) */
-                if (responding) sendRaw("{\"type\":\"response.cancel\"}")
-                val content = JSONArray().put(JSONObject().put("type", "input_text").put("text", text))
-                sendRaw(JSONObject().put("type", "conversation.item.create").put("item", JSONObject().put("type", "message").put("role", "user").put("content", content)).toString())
-                sendRaw("{\"type\":\"response.create\"}")
-            }
-            override fun onFatal(why: String) {
-                /* 이 폰에서는 구글 받아쓰기를 못 씀 → 예전 방식으로 바꿔서 계속 */
-                stt?.stop()
-                stt = null
-                if (!running || !gMode) return
-                gMode = false
-                preHold = false
-                emit(JSONObject().put("type", "sori.log").put("text", "🎙 폰 음성 인식을 쓸 수 없어 예전 방식으로 들어요").toString())
-                if (!startMic()) shutdown("마이크를 열지 못했어요", why, false)
-            }
-        })
-        stt = g
-        return try { g.start(playing || preHold); true } catch (e: Exception) { stt = null; false }
-    }
-
-    /** 소리가 말하는 동안 · 깨울 때 한 말을 처리하는 동안은 받아쓰기를 멈춘다 */
-    private fun syncHold() {
-        main.post { stt?.hold(playing || preHold) }
     }
 
     /* 48kHz → 24kHz (두 개씩 평균) */
@@ -953,9 +874,14 @@ class SoriService : Service(), WakeListener.Callback {
         } catch (e: Exception) { }
     }
 
+    /* v17: 🗣️ 아이콘은 소리가 명령으로 연 앱(카카오내비·카카오맵·말로 연 앱) 위에만 — 명령 뒤 20초 안에 coverfo 를 떠난 경우.
+       내가 직접 연 다른 앱(구글 렌즈 등)으로 갈 때는 띄우지 않는다. coverfo 화면 안에서는 화면의 🟣 */
+    @Volatile private var cmdAt = 0L
+
     fun showBubble() {
         main.post {
             if ((!running && !keepIcon) || bubble != null || !Settings.canDrawOverlays(this)) return@post
+            if (System.currentTimeMillis() - cmdAt > 20_000L) return@post
             /* v15: 대화 중이면 누르면 대화 화면, 대기 모양이면 누르면 바로 다시 대화 */
             bubble = Bubble(this) { if (running) bringToFront(true) else talkFront() }.also {
                 it.show()
@@ -991,11 +917,6 @@ class SoriService : Service(), WakeListener.Callback {
         main.post {
             main.removeCallbacks(tick)
             main.removeCallbacks(idle)
-            stt?.stop()
-            stt = null
-            gMode = false
-            preHold = false
-            responding = false
             try { ws?.close(1000, null) } catch (e: Exception) { }
             ws = null
             try { rec?.stop() } catch (e: Exception) { }
