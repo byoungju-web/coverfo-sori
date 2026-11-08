@@ -64,8 +64,8 @@ object WakeMatch {
         return prev[b.length]
     }
 
-    /** text 안에 names 중 하나가 (거의) 들어 있으면 true */
-    fun hit(text: String, names: List<String>): Boolean {
+    /** text 안에 names 중 하나가 (거의) 들어 있으면 true · maxD: 한글 자모 몇 개까지 달라도 같은 것으로 볼지 */
+    fun hit(text: String, names: List<String>, maxD: Int = 1): Boolean {
         val t = norm(text)
         if (t.isEmpty()) return false
         for (raw in names) {
@@ -74,10 +74,10 @@ object WakeMatch {
             if (t.contains(n)) return true
             if (n.length < 3) continue                      // 2글자 이하 이름은 정확히 같을 때만 (잘못 깨는 것 방지)
             val nj = jamo(n)
-            for (len in (n.length - 1)..(n.length + 1)) {
+            for (len in (n.length - maxD)..(n.length + maxD)) {
                 if (len < 2 || len > t.length) continue
                 for (i in 0..(t.length - len)) {
-                    if (dist(jamo(t.substring(i, i + len)), nj) <= 1) return true
+                    if (dist(jamo(t.substring(i, i + len)), nj) <= maxD) return true
                 }
             }
         }
@@ -86,17 +86,18 @@ object WakeMatch {
 }
 
 /**
- * v18 이름만 알아듣는 받아쓰기(문법 모드) — 대기 중에는 '아무 말'을 받아쓰지 않고 이름 단어(예: 소리야 · 소리 · 야)와 [그 밖의 말] 중에서만 고르게 한다.
- * 모든 말 중에서 고를 때보다 이름을 훨씬 잘 알아듣는다(처음 부를 때 놓치는 것 줄이기). 모델 단어장에 이름 단어가 하나도 없으면 예전 방식(모든 말 받아쓰기) 그대로.
- * '이름 시험하기'는 들린 말을 보여 줘야 하므로 예전 방식으로.
+ * v18 이름만 알아듣는 받아쓰기(문법 모드) — 이름 단어(예: 소리야 · 소리 · 야)와 [그 밖의 말] 중에서만 고르는 받아쓰기.
+ * v19: 이것만으로 깨우면 다른 말·TV 소리에도 깨어나서(v18), 이제는 '두 귀가 모두 동의할 때'만 깨운다:
+ *   ① 예전 받아쓰기(모든 말)가 이름을 들었으면 → 깨움 (v17 과 같음)
+ *   ② 이름 받아쓰기가 '소리야'를 통째로 들었고, 같은 때 예전 받아쓰기도 이름과 비슷한 말(자모 2개 차이까지)을 들었으면 → 깨움
+ *   '소리' 만 들린 것으로는 깨우지 않는다.
  */
 class WakeGrammar(val grammar: String, private val full: Set<String>, private val stems: Set<String>) {
-    /** 문법 모드 결과에서 이름 찾기: 이름이 통째로 들어 있으면(소리야 · 소리 야) 바로, 이름 앞부분(소리)만 '혼자' 끝난 말이면 깨움 */
-    fun hit(text: String, fin: Boolean): Boolean {
+    /** 이름 받아쓰기 결과에 이름이 통째로 들어 있으면(소리야 · 소리 야) true */
+    fun hit(text: String): Boolean {
         val nn = WakeMatch.norm(text.replace("[unk]", " "))
         if (nn.isEmpty()) return false
-        if (full.any { nn.contains(it) }) return true
-        return fin && stems.any { nn == it }
+        return full.any { nn.contains(it) }
     }
 
     companion object {
@@ -377,6 +378,8 @@ class WakeListener(private val ctx: Context, private val cb: Callback) {
             var gram = WakeGrammar.build(VoskStore.dir(ctx), gNames)
             grec = makeGrammarRec(m, gram)
             var lastTest = test
+            var lastFree = ""
+            var lastFreeAt = 0L
             val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             ar = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE, AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT, max(min, RATE))
@@ -405,25 +408,38 @@ class WakeListener(private val ctx: Context, private val cb: Callback) {
                             grec = makeGrammarRec(m, gram)
                         }
                         if (test != lastTest) { lastTest = test; try { rec.reset(); grec?.reset() } catch (e: Throwable) { } }
-                        val g = if (!test) grec else null
-                        val r = g ?: rec
-                        val fin = r.acceptWaveForm(buf, n)
+                        /* ① 예전 받아쓰기 (모든 말) */
+                        val fin = rec.acceptWaveForm(buf, n)
                         val text = try {
-                            if (fin) JSONObject(r.getResult()).optString("text") else JSONObject(r.getPartialResult()).optString("partial")
+                            if (fin) JSONObject(rec.getResult()).optString("text") else JSONObject(rec.getPartialResult()).optString("partial")
                         } catch (e: Exception) { "" }
-                        if (text.isBlank()) continue
-                        val gm = gram
-                        val hit = if (g != null && gm != null) gm.hit(text, fin) else WakeMatch.hit(text, names)
+                        var hit = text.isNotBlank() && WakeMatch.hit(text, names)
                         if (test) {
-                            if (fin) cb.onHeard(text, hit)
+                            if (fin && text.isNotBlank()) cb.onHeard(text, hit)
                             continue
                         }
+                        /* ② 이름 받아쓰기는 '확인'용: 둘이 같이 들었을 때만 */
+                        val g = grec
+                        val gm = gram
+                        if (g != null && gm != null) {
+                            val gf = g.acceptWaveForm(buf, n)
+                            val gt = try {
+                                if (gf) JSONObject(g.getResult()).optString("text") else JSONObject(g.getPartialResult()).optString("partial")
+                            } catch (e: Exception) { "" }
+                            if (!hit && gm.hit(gt)) {
+                                val near = (text.isNotBlank() && WakeMatch.hit(text, names, 2)) ||
+                                    (now - lastFreeAt < 1500 && WakeMatch.hit(lastFree, names, 2))
+                                if (near) hit = true
+                            }
+                        }
+                        if (fin && text.isNotBlank()) { lastFree = text; lastFreeAt = now }
                         if (hit) {
                             synchronized(lock) {
                                 cmd = ByteArrayOutputStream().also { it.write(ringTail(PRE_MS)) }
                                 state = 1
                             }
-                            r.reset()
+                            try { rec.reset(); grec?.reset() } catch (e: Throwable) { }
+                            lastFree = ""
                             armedAt = now
                             speech = 0
                             cb.onWake()
