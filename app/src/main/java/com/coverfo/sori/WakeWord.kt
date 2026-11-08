@@ -85,6 +85,110 @@ object WakeMatch {
     }
 }
 
+/**
+ * v18 이름만 알아듣는 받아쓰기(문법 모드) — 대기 중에는 '아무 말'을 받아쓰지 않고 이름 단어(예: 소리야 · 소리 · 야)와 [그 밖의 말] 중에서만 고르게 한다.
+ * 모든 말 중에서 고를 때보다 이름을 훨씬 잘 알아듣는다(처음 부를 때 놓치는 것 줄이기). 모델 단어장에 이름 단어가 하나도 없으면 예전 방식(모든 말 받아쓰기) 그대로.
+ * '이름 시험하기'는 들린 말을 보여 줘야 하므로 예전 방식으로.
+ */
+class WakeGrammar(val grammar: String, private val full: Set<String>, private val stems: Set<String>) {
+    /** 문법 모드 결과에서 이름 찾기: 이름이 통째로 들어 있으면(소리야 · 소리 야) 바로, 이름 앞부분(소리)만 '혼자' 끝난 말이면 깨움 */
+    fun hit(text: String, fin: Boolean): Boolean {
+        val nn = WakeMatch.norm(text.replace("[unk]", " "))
+        if (nn.isEmpty()) return false
+        if (full.any { nn.contains(it) }) return true
+        return fin && stems.any { nn == it }
+    }
+
+    companion object {
+        private const val TAILS = "야아이여"
+        @Volatile private var cacheKey = ""
+        @Volatile private var cacheVal: WakeGrammar? = null
+
+        /** 단어장 찾기는 한 번만 (대화가 끝나 대기를 다시 켤 때마다 모델 파일을 다시 읽지 않게) */
+        fun build(dir: File, names: List<String>): WakeGrammar? {
+            val key = dir.absolutePath + "|" + names.joinToString("|")
+            if (key == cacheKey) return cacheVal
+            val g = make(dir, names)
+            cacheVal = g
+            cacheKey = key
+            return g
+        }
+
+        private fun make(dir: File, names: List<String>): WakeGrammar? {
+            val full = LinkedHashSet<String>()
+            val stems = LinkedHashSet<String>()
+            val tails = LinkedHashSet<String>()
+            for (x in names) {
+                val n = WakeMatch.norm(x)
+                if (n.length < 2) continue
+                full.add(n)
+                if (n.length >= 3 && TAILS.indexOf(n.last()) >= 0) { stems.add(n.dropLast(1)); tails.add(n.last().toString()) }
+            }
+            val have = known(dir, full + stems + tails)
+            val f = full.filter { it in have }.toSet()
+            val st = stems.filter { it in have }.toSet()
+            if (f.isEmpty() && st.isEmpty()) return null
+            val words = org.json.JSONArray()
+            (f + st + tails.filter { it in have }).forEach { words.put(it) }
+            words.put("[unk]")
+            /* 단어장에 '소리' 와 '야' 가 따로 있으면 '소리 야' 로도 나오므로 이름 전체로 본다 */
+            val fullAll = full.filter { n -> n in have || (n.length >= 3 && n.dropLast(1) in have && n.last().toString() in have) }.toSet()
+            return WakeGrammar(words.toString(), fullAll, st)
+        }
+
+        /** 모델 단어장(graph/words.txt, 없으면 graph/Gr.fst 안의 단어 목록)에 있는 단어만 */
+        private fun known(dir: File, want: Set<String>): Set<String> {
+            val out = HashSet<String>()
+            if (want.isEmpty()) return out
+            try {
+                val wt = File(dir, "graph/words.txt")
+                if (wt.exists()) {
+                    wt.bufferedReader(Charsets.UTF_8).useLines { seq ->
+                        seq.forEach { l -> val w = l.trim().split(' ', '\t').firstOrNull().orEmpty(); if (w in want) out.add(w) }
+                    }
+                    return out
+                }
+                val gr = File(dir, "graph/Gr.fst")
+                if (!gr.exists()) return out
+                /* OpenFst 단어 목록: [글자 길이 4바이트][UTF-8 글자] → 그 모양 그대로 찾기 (조금씩 읽음) */
+                val pats = want.map { w ->
+                    val b = w.toByteArray(Charsets.UTF_8)
+                    val p = ByteArray(4 + b.size)
+                    p[0] = (b.size and 255).toByte(); p[1] = ((b.size shr 8) and 255).toByte()
+                    System.arraycopy(b, 0, p, 4, b.size)
+                    w to p
+                }
+                val maxLen = pats.maxOf { it.second.size }
+                val buf = ByteArray(1 shl 20)
+                var keep = 0
+                gr.inputStream().buffered().use { inp ->
+                    while (out.size < pats.size) {
+                        val n = inp.read(buf, keep, buf.size - keep)
+                        if (n <= 0) break
+                        val len = keep + n
+                        for ((w, p) in pats) if (w !in out && find(buf, len, p)) out.add(w)
+                        keep = minOf(maxLen - 1, len)
+                        System.arraycopy(buf, len - keep, buf, 0, keep)
+                    }
+                }
+            } catch (e: Throwable) { }
+            return out
+        }
+
+        private fun find(b: ByteArray, len: Int, p: ByteArray): Boolean {
+            var i = 0
+            val last = len - p.size
+            while (i <= last) {
+                var j = 0
+                while (j < p.size && b[i + j] == p[j]) j++
+                if (j == p.size) return true
+                i++
+            }
+            return false
+        }
+    }
+}
+
 /** 한국어 음성 모델 (약 82MB) — 처음 켤 때 한 번 내려받아 앱 안에 둔다 */
 object VoskStore {
     const val NAME = "vosk-model-small-ko-0.22"
@@ -253,14 +357,26 @@ class WakeListener(private val ctx: Context, private val cb: Callback) {
     }
 
     @SuppressLint("MissingPermission")
+    private fun makeGrammarRec(m: Model, g: WakeGrammar?): Recognizer? {
+        if (g == null) return null
+        return try { Recognizer(m, RATE.toFloat(), g.grammar) } catch (e: Throwable) { null }
+    }
+
     private fun loop() {
         var model: Model? = null
         var rec: Recognizer? = null
+        var grec: Recognizer? = null
         var ar: AudioRecord? = null
         try {
             try { LibVosk.setLogLevel(LogLevel.WARNINGS) } catch (e: Throwable) { }
-            model = Model(VoskStore.dir(ctx).absolutePath)
-            rec = Recognizer(model, RATE.toFloat())
+            val m = Model(VoskStore.dir(ctx).absolutePath)
+            model = m
+            rec = Recognizer(m, RATE.toFloat())
+            /* v18: 이름만 알아듣는 받아쓰기 (단어장에 이름이 없으면 null → 예전 방식) */
+            var gNames = names
+            var gram = WakeGrammar.build(VoskStore.dir(ctx), gNames)
+            grec = makeGrammarRec(m, gram)
+            var lastTest = test
             val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             ar = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE, AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT, max(min, RATE))
@@ -281,12 +397,23 @@ class WakeListener(private val ctx: Context, private val cb: Callback) {
                 when (state) {
                     0 -> {
                         if (level < noise * 1.5) noise = noise * 0.95 + level * 0.05      // 조용할 때 바닥 소음을 천천히 따라감
-                        val fin = rec.acceptWaveForm(buf, n)
+                        /* 이름을 바꿨으면 이름 받아쓰기도 새로 */
+                        if (names !== gNames) {
+                            gNames = names
+                            try { grec?.close() } catch (e: Throwable) { }
+                            gram = WakeGrammar.build(VoskStore.dir(ctx), gNames)
+                            grec = makeGrammarRec(m, gram)
+                        }
+                        if (test != lastTest) { lastTest = test; try { rec.reset(); grec?.reset() } catch (e: Throwable) { } }
+                        val g = if (!test) grec else null
+                        val r = g ?: rec
+                        val fin = r.acceptWaveForm(buf, n)
                         val text = try {
-                            if (fin) JSONObject(rec.getResult()).optString("text") else JSONObject(rec.getPartialResult()).optString("partial")
+                            if (fin) JSONObject(r.getResult()).optString("text") else JSONObject(r.getPartialResult()).optString("partial")
                         } catch (e: Exception) { "" }
                         if (text.isBlank()) continue
-                        val hit = WakeMatch.hit(text, names)
+                        val gm = gram
+                        val hit = if (g != null && gm != null) gm.hit(text, fin) else WakeMatch.hit(text, names)
                         if (test) {
                             if (fin) cb.onHeard(text, hit)
                             continue
@@ -296,7 +423,7 @@ class WakeListener(private val ctx: Context, private val cb: Callback) {
                                 cmd = ByteArrayOutputStream().also { it.write(ringTail(PRE_MS)) }
                                 state = 1
                             }
-                            rec.reset()
+                            r.reset()
                             armedAt = now
                             speech = 0
                             cb.onWake()
@@ -327,6 +454,7 @@ class WakeListener(private val ctx: Context, private val cb: Callback) {
             try { ar?.stop() } catch (e: Exception) { }
             try { ar?.release() } catch (e: Exception) { }
             try { rec?.close() } catch (e: Throwable) { }
+            try { grec?.close() } catch (e: Throwable) { }
             try { model?.close() } catch (e: Throwable) { }
             run = false
         }
