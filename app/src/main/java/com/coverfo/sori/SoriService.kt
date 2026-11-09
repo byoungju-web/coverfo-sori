@@ -1,5 +1,6 @@
 package com.coverfo.sori
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
@@ -332,6 +333,8 @@ class SoriService : Service(), WakeListener.Callback {
             if (System.currentTimeMillis() - p.getLong("ctxNaviAt", 0L) < 6 * 3_600_000L) body.put("navi", p.getString("ctxNavi", "") ?: "")
             /* v10: 화면 도우미가 깔려 있으면 누르기·읽기 도구를 받는다 */
             if (ScreenHelper.installed(this)) body.put("screen", 1)
+            /* v20 📞 연락처 찾기 · 바로 전화 · 문자 채워서 열기 도구를 받는다 */
+            body.put("phone", 1)
             val (code, j) = post(body.toString())
             if (code != 200 || j == null || j.optString("key").isEmpty()) {
                 val msg = when (code) { 401 -> "로그인 후 사용할 수 있어요"; 402 -> "크레딧이 부족해요"; else -> "연결하지 못했어요" }
@@ -419,6 +422,8 @@ class SoriService : Service(), WakeListener.Callback {
                         /* v10 🖐 화면 도우미: 다른 앱 화면 누르기 · 읽기 */
                         "tap_screen", "read_screen", "scroll_screen" -> main.post { screenTool(ev, text) }
                         "open_app" -> main.post { openApp(ev) }
+                        /* v20 📞 연락처 · 전화 · 문자 */
+                        "find_contact", "call_phone", "send_sms" -> main.post { phoneTool(ev) }
                         "run_relay", "relay_answer" -> main.post { relay(ev) }
                         "end_conversation" -> {
                             sendOutput(ev.optString("call_id"), JSONObject().put("ok", true), false)
@@ -433,6 +438,8 @@ class SoriService : Service(), WakeListener.Callback {
                    대화 중에는 '소리야' 대기(폰 안 인식)가 꺼져 있어서, 대화 받아쓰기로 알아본다 */
                 "conversation.item.input_audio_transcription.completed" -> {
                     val said = ev.optString("transcript")
+                    lastSaid = said
+                    lastSaidAt = System.currentTimeMillis()
                     if (nameOnly(said)) main.post { bringToFront(true) }
                     emit(text)
                 }
@@ -572,6 +579,121 @@ class SoriService : Service(), WakeListener.Callback {
         if (ok) { cmdAt = System.currentTimeMillis(); if (MainActivity.current?.resumed != true) showBubble() }
         sendOutput(ev.optString("call_id"), r, !ok)          // 못 열었으면 비서가 짧게 알려 주도록
         emit(JSONObject().put("type", "sori.log").put("text", (if (ok) "▶ 앱 열기: " else "⚠️ 앱을 열지 못했어요: ") + r.optString("app", name)).toString())
+    }
+
+    /* ── v20 📞 끝까지 해 주기 1단계: 연락처 찾기 · 바로 전화 · 문자 채워서 열기 ──
+       · 전화·문자는 반드시 한 번 확인: 처음 부르면 need_confirm(무엇을 물을지)을 돌려주고 화면에 확인 카드.
+         그 뒤 이용자가 "응/네"라고 말했거나(받아쓰기) 카드의 [네]를 눌렀을 때만 실행한다 (같은 사람·같은 일일 때).
+       · 소리 대화에는 이름과 번호 끝 4자리만 넘긴다. 기록은 이 폰의 대화 기록에만 */
+    @Volatile private var lastSaid = ""
+    @Volatile private var lastSaidAt = 0L
+    @Volatile private var uiYesAt = 0L
+    private var people: List<PhoneActs.Person> = emptyList()
+    private var askKey = ""
+    private var askAt = 0L
+    private val YES = Regex("(응|으응|어\\s*그래|네|넵|예|그래|좋아|보내|걸어|해\\s*줘|맞아|ㅇㅇ|진행|오케이|okay|ok|yes)", RegexOption.IGNORE_CASE)
+    private val NO = Regex("(아니|아냐|취소|하지\\s*마|그만|잠깐|잠시만|\\bno\\b)", RegexOption.IGNORE_CASE)
+
+    private fun phoneTool(ev: JSONObject, tries: Int = 0) {
+        val callId = ev.optString("call_id")
+        val name = ev.optString("name")
+        val a = try { JSONObject(ev.optString("arguments", "{}")) } catch (e: Exception) { JSONObject() }
+        fun out(o: JSONObject) = sendOutput(callId, o, true)
+        if (name == "find_contact") {
+            val q = a.optString("name").trim()
+            if (!PhoneActs.canContacts(this)) { askPerm(Manifest.permission.READ_CONTACTS); out(needPerm("contacts")); return }
+            val r = PhoneActs.find(this, q)
+            if (r.isNotEmpty()) people = r
+            out(JSONObject().put("ok", true).put("matches", JSONArray().also { arr -> r.forEach { arr.put(JSONObject().put("name", it.name).put("last4", PhoneActs.last4(it.number))) } })
+                .put("note", if (r.isEmpty()) "No contact found with that name." else if (r.size > 1) "Several people match. Ask which one (name and last 4 digits)." else "One person found."))
+            relayLog("🔎 연락처: '" + q + "' " + r.size + "명")
+            return
+        }
+        /* 받는 사람: 번호(장소 목록의 가게 번호 등) 또는 연락처 이름 */
+        val to = a.optString("to").trim()
+        val label = a.optString("label").trim()
+        var who: PhoneActs.Person? = null
+        val dg = PhoneActs.digits(to)
+        if (dg.length >= 7) who = PhoneActs.Person(if (label.isNotEmpty()) label else to, dg)
+        else {
+            if (!PhoneActs.canContacts(this)) { askPerm(Manifest.permission.READ_CONTACTS); out(needPerm("contacts")); return }
+            val t4 = a.optString("last4").filter { it.isDigit() }
+            var c = people.filter { it.name == to || it.name.contains(to) || (to.isNotEmpty() && to.contains(it.name)) }
+            if (c.isEmpty()) c = PhoneActs.find(this, to).also { if (it.isNotEmpty()) people = it }
+            if (t4.length == 4) c = c.filter { it.number.endsWith(t4) }.ifEmpty { c }
+            if (c.isEmpty()) { out(JSONObject().put("ok", false).put("note", "No contact found for '" + to + "'. Ask the user for the exact name as saved in the phone, or a phone number.")); return }
+            val exact = c.filter { it.name == to }
+            if (c.size > 1 && exact.size != 1) {
+                out(JSONObject().put("ok", false).put("choose", JSONArray().also { arr -> c.take(6).forEach { arr.put(JSONObject().put("name", it.name).put("last4", PhoneActs.last4(it.number))) } })
+                    .put("note", "Several people match. Ask which one (read names with the last 4 digits), then call again with that name and last4."))
+                return
+            }
+            who = if (exact.size == 1) exact[0] else c[0]
+        }
+        val p = who ?: return
+        val isCall = name == "call_phone"
+        val text = a.optString("text").trim().take(500)
+        if (!isCall && text.isEmpty()) { out(JSONObject().put("ok", false).put("note", "Write the message text first.")); return }
+        if (!isCall && Regex("(계좌|카드\\s*번호|비밀번호|송금|이체)").containsMatchIn(text)) {
+            out(JSONObject().put("ok", false).put("note", "Do not put account, card, password or money transfer details in a text. Tell the user to write it themselves."))
+            return
+        }
+        /* 문자는 내용까지 같아야 같은 일 (내용을 바꾸면 다시 확인) */
+        val key = if (isCall) "call:" + p.number else "sms:" + p.number + ":" + text
+        val now = System.currentTimeMillis()
+        val agreed = key == askKey && now - askAt < 180_000L &&
+            ((uiYesAt > askAt) || (lastSaidAt > askAt && YES.containsMatchIn(lastSaid) && !NO.containsMatchIn(lastSaid)))
+        if (!a.optBoolean("confirmed") || !agreed) {
+            /* "응" 받아쓰기가 도구 호출보다 조금 늦게 올 수 있다 → 잠깐 기다렸다가 한 번 더 본다 */
+            if (a.optBoolean("confirmed") && key == askKey && tries < 2) { main.postDelayed({ phoneTool(ev, tries + 1) }, 800); return }
+            askKey = key
+            askAt = now
+            val q = if (isCall) p.name + "님께 전화할까요?" else p.name + "님께 '" + text + "'라고 문자 보낼까요?"
+            emit(JSONObject().put("type", "sori.confirm").put("kind", if (isCall) "call" else "sms").put("text", q).toString())
+            /* 전화 권한이 아직 없으면 묻는 동안 같이 허용 창을 띄운다 (없으면 키패드에 번호만 채워서 연다) */
+            if (isCall && !PhoneActs.canCall(this)) askPerm(Manifest.permission.CALL_PHONE)
+            out(JSONObject().put("ok", false).put("need_confirm", true).put("ask", q).put("last4", PhoneActs.last4(p.number))
+                .put("note", "Ask the user exactly this in one short sentence and wait. Only after they agree, call this tool again with confirmed true."))
+            return
+        }
+        askKey = ""
+        emit("{\"type\":\"sori.confirm\",\"done\":true}")
+        if (isCall) {
+            relayLog("📞 전화: " + p.name + " (…" + PhoneActs.last4(p.number) + ")")
+            sendOutput(callId, JSONObject().put("ok", true).put("note", "Calling now. This conversation ends so the call can use the microphone."), false)
+            /* 통화가 마이크를 쓰도록 대화를 먼저 끝내고 건다 */
+            main.postDelayed({
+                if (running) shutdown("📞 " + p.name + "님께 전화를 걸었어요", null, false)
+                main.postDelayed({ PhoneActs.call(this, p.number) }, 400)
+            }, 600)
+        } else {
+            val ok = PhoneActs.sms(this, p.number, text)
+            if (ok) { cmdAt = System.currentTimeMillis(); if (MainActivity.current?.resumed != true) showBubble() }
+            relayLog(if (ok) "💬 문자 준비: " + p.name + " (…" + PhoneActs.last4(p.number) + ") · 문자 앱에서 보내기를 눌러 주세요" else "⚠️ 문자 앱을 열지 못했어요")
+            out(JSONObject().put("ok", ok).put("note", if (ok) "The message app is open with the number and text filled in. Tell the user to press 보내기 (send) there." else "Could not open the message app."))
+        }
+    }
+
+    private fun needPerm(what: String) = JSONObject().put("ok", false).put("need_permission", what)
+        .put("note", "The phone is asking the user to allow " + (if (what == "call") "phone calls" else "contacts") + " for coverfo 소리. Tell them to press 허용 on the screen, then ask again.")
+
+    /* 권한은 화면(MainActivity)에서만 물을 수 있다 → coverfo 를 앞으로 가져와 묻는다 */
+    private fun askPerm(perm: String) {
+        try {
+            startActivity(Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra("askPerm", perm))
+        } catch (e: Exception) { }
+    }
+
+    /** 화면의 확인 카드 [네]/[아니요] (MainActivity.soriConfirm) */
+    fun uiConfirm(ok: Boolean) {
+        if (!running) return
+        if (ok) uiYesAt = System.currentTimeMillis() else askKey = ""
+        val content = JSONArray().put(JSONObject().put("type", "input_text").put("text", if (ok) "네, 그렇게 해 주세요." else "아니요, 하지 마세요."))
+        sendRaw(JSONObject().put("type", "conversation.item.create").put("item", JSONObject().put("type", "message").put("role", "user").put("content", content)).toString())
+        sendRaw("{\"type\":\"response.create\"}")
+        if (!ok) emit("{\"type\":\"sori.confirm\",\"done\":true}")
     }
 
     /* ── v5 커넥션 허브 2.0 릴레이 ── */

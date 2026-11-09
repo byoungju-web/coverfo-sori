@@ -50,6 +50,7 @@ class MainActivity : Activity() {
         private const val REQ_FILE = 13
         private const val REQ_WAKE = 14
         private const val REQ_BRIEF = 15
+        private const val REQ_PHONE = 16
         private const val HOME = "https://coverfo.com/"
         /* Google 로그인이 끝나면 돌아올 coverfo 페이지 → 거기서 coverfosori://login 으로 앱에 넘겨줌 (Supabase Redirect URLs 에 등록 필요) */
         private const val APP_LOGIN = "https://coverfo.com/app-login.html"
@@ -141,6 +142,7 @@ class MainActivity : Activity() {
         }
 
         takeLogin(intent)
+        askPerm(intent)
         val start = intent?.dataString?.takeIf { it.startsWith("https://coverfo.com") } ?: HOME
         web.loadUrl(start)
     }
@@ -412,9 +414,23 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    /* v20 📞 소리가 연락처·전화 권한이 필요할 때 화면에서 묻는다 (SoriService.askPerm → askPerm 꼬리표) */
+    private fun askPerm(i: Intent?): Boolean {
+        val p = i?.getStringExtra("askPerm") ?: return false
+        i.removeExtra("askPerm")
+        if (p != Manifest.permission.READ_CONTACTS && p != Manifest.permission.CALL_PHONE) return true
+        if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) requestPermissions(arrayOf(p), REQ_PHONE)
+        return true
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         val ok = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+        if (requestCode == REQ_PHONE) {
+            val what = if (permissions.firstOrNull() == Manifest.permission.CALL_PHONE) "전화" else "연락처"
+            SoriService.instance?.relayLog(if (ok) "✅ $what 권한을 허용했어요 · 다시 말씀해 주세요" else "⚠️ $what 권한을 허용하지 않았어요")
+            return
+        }
         if (requestCode == REQ_MIC) {
             webPermission?.let { if (ok) it.grant(it.resources) else it.deny() }
             webPermission = null
@@ -490,6 +506,7 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (askPerm(intent)) return
         if (takeLogin(intent)) {
             /* 앱이 이미 열려 있으면 바로 넣는다 */
             pendingLogin?.let { p -> pendingLogin = null; js("window.cfAppSession&&window.cfAppSession($p)") }
@@ -637,6 +654,12 @@ class MainActivity : Activity() {
                     openExternal(Intent(Intent.ACTION_VIEW, u))
                 }
             }
+        }
+
+        /* v20 📞 소리 확인 카드 [네]/[아니요] → 소리 대화에 그대로 전한다 */
+        @JavascriptInterface
+        fun soriConfirm(ok: Boolean) {
+            runOnUiThread { SoriService.instance?.uiConfirm(ok) }
         }
 
         /* v5 카톡 보내기: {"to":["김철수"],"text":"…"} → "auto"(자동으로 찾는 중) · "share"(대화방을 눌러 주세요) · "noapp" */
