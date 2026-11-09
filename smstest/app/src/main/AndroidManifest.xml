@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- coverfo 문자 시험 (com.coverfo.smstest)
-     · 목적: 문자 보내기(SEND_SMS) · 연락처 읽기(READ_CONTACTS) · 전화 걸기(CALL_PHONE) 권한이 든 앱이
+     · 시험 2: 문자 보내기(SEND_SMS)를 넣은 1차는 플레이 프로텍트에 '유해한 앱'으로 막혔다(2026-11-09).
+       이번에는 문자 권한을 빼고 연락처 읽기(READ_CONTACTS) · 전화 걸기(CALL_PHONE)만 넣어서
        폰에 설치되는지(플레이 프로텍트) · 권한 허용 창이 뜨는지 · 실제로 문자가 나가는지 확인한다.
      · 이용자가 직접 누를 때만 보낸다. 받은 문자는 읽지 않는다. 인터넷 권한도 없다 (아무 데도 보내지 않음) -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
-    <uses-permission android:name="android.permission.SEND_SMS" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
 
