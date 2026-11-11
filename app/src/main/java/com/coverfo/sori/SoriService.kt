@@ -404,10 +404,11 @@ class SoriService : Service(), WakeListener.Callback {
                     lastActive = System.currentTimeMillis()
                     val name = ev.optString("name")
                     when (name) {
-                        /* v13: place_list(장소 목록)도 coverfo 화면에 띄우므로 앞으로 */
-                        "run_command", "show_chat", "press_button", "run_routine", "open_screen", "recall", "place_list" -> {
+                        /* v13: place_list(장소 목록)도 coverfo 화면에 띄우므로 앞으로
+                           v21: place_action(가게 열기·길안내·예약 화면)도 — 카카오맵이 앞에 있어도 coverfo 화면이 가게를 열거나 예약 창을 띄운다 */
+                        "run_command", "show_chat", "press_button", "run_routine", "open_screen", "recall", "place_list", "place_action" -> {
                             /* v17: 이 명령으로 다른 앱(내비·지도 등)이 열리면 그 앱 위에만 🗣️ 아이콘 */
-                            if (name == "run_command" || name == "press_button" || name == "place_list") cmdAt = System.currentTimeMillis()
+                            if (name == "run_command" || name == "press_button" || name == "place_list" || name == "place_action") cmdAt = System.currentTimeMillis()
                             /* coverfo 화면을 앞으로 → 화면이 명령을 실행(지도·내비 앱 열기 등). 대화는 계속 */
                             main.post { bringToFront(false) }
                             main.postDelayed({ emit(text) }, 700)
@@ -621,7 +622,7 @@ class SoriService : Service(), WakeListener.Callback {
             var c = people.filter { it.name == to || it.name.contains(to) || (to.isNotEmpty() && to.contains(it.name)) }
             if (c.isEmpty()) c = PhoneActs.find(this, to).also { if (it.isNotEmpty()) people = it }
             if (t4.length == 4) c = c.filter { it.number.endsWith(t4) }.ifEmpty { c }
-            if (c.isEmpty()) { out(JSONObject().put("ok", false).put("note", "No contact found for '" + to + "'. Ask the user for the exact name as saved in the phone, or a phone number.")); return }
+            if (c.isEmpty()) { out(JSONObject().put("ok", false).put("note", "No contact found for '" + to + "'. If it is a shop or restaurant (e.g. the place open in KakaoMap), call place_action with action call to get its number, then call this tool again with that number as to and the name as label. Otherwise ask for the exact name as saved in the phone, or a phone number (it does not need to be saved).")); return }
             val exact = c.filter { it.name == to }
             if (c.size > 1 && exact.size != 1) {
                 out(JSONObject().put("ok", false).put("choose", JSONArray().also { arr -> c.take(6).forEach { arr.put(JSONObject().put("name", it.name).put("last4", PhoneActs.last4(it.number))) } })
