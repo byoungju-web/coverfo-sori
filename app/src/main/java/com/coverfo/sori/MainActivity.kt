@@ -14,6 +14,7 @@ import android.provider.Settings
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.webkit.CookieManager
+import android.webkit.GeolocationPermissions
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
@@ -51,6 +52,7 @@ class MainActivity : Activity() {
         private const val REQ_WAKE = 14
         private const val REQ_BRIEF = 15
         private const val REQ_PHONE = 16
+        private const val REQ_LOC = 17   /* v22 📍 내 위치 (근처 주유소·주차장) */
         private const val HOME = "https://coverfo.com/"
         /* Google 로그인이 끝나면 돌아올 coverfo 페이지 → 거기서 coverfosori://login 으로 앱에 넘겨줌 (Supabase Redirect URLs 에 등록 필요) */
         private const val APP_LOGIN = "https://coverfo.com/app-login.html"
@@ -64,6 +66,7 @@ class MainActivity : Activity() {
     private var pendingToken: String? = null       // 마이크·다른 앱 위 권한을 받은 뒤 시작할 로그인 키
     private var waitOverlay = false
     private var webPermission: PermissionRequest? = null
+    private var pendingGeo: Pair<String, GeolocationPermissions.Callback>? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var pendingLogin: String? = null       // 화면을 다 불러온 뒤 넣을 로그인 값(JSON)
     private var kakaoKey = ""
@@ -89,6 +92,7 @@ class MainActivity : Activity() {
 
         val s = web.settings
         s.javaScriptEnabled = true
+        s.setGeolocationEnabled(true)   /* v22 📍 */
         s.domStorageEnabled = true
         s.databaseEnabled = true
         s.mediaPlaybackRequiresUserGesture = false
@@ -123,6 +127,22 @@ class MainActivity : Activity() {
                     } else {
                         webPermission = request
                         requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MIC)
+                    }
+                }
+            }
+
+            /* v22 📍 내 위치: coverfo.com 화면이 물을 때만 · 처음 한 번 안드로이드 위치 권한을 묻는다 (대략 위치만 허용해도 됨) */
+            override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
+                val ours = origin.startsWith("https://coverfo.com") || origin.startsWith("https://www.coverfo.com")
+                if (!ours) { callback.invoke(origin, false, false); return }
+                runOnUiThread {
+                    val fine = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    val coarse = checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    if (fine || coarse) callback.invoke(origin, true, false)
+                    else {
+                        pendingGeo?.let { it.second.invoke(it.first, false, false) }
+                        pendingGeo = Pair(origin, callback)
+                        requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), REQ_LOC)
                     }
                 }
             }
@@ -426,6 +446,12 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         val ok = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+        if (requestCode == REQ_LOC) {   /* v22 📍: 정확·대략 중 하나라도 허용하면 */
+            val any = grantResults.any { it == PackageManager.PERMISSION_GRANTED }
+            pendingGeo?.let { it.second.invoke(it.first, any, false) }
+            pendingGeo = null
+            return
+        }
         if (requestCode == REQ_PHONE) {
             val what = if (permissions.firstOrNull() == Manifest.permission.CALL_PHONE) "전화" else "연락처"
             SoriService.instance?.relayLog(if (ok) "✅ $what 권한을 허용했어요 · 다시 말씀해 주세요" else "⚠️ $what 권한을 허용하지 않았어요")
