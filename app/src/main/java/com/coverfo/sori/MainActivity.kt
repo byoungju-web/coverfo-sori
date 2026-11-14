@@ -302,8 +302,22 @@ class MainActivity : Activity() {
         }
     }
 
+    /* v23: 예전에 켜 둔 '이름 부르기 대기'를 한 번 끈다 (업데이트 후 첫 화면) */
+    private fun retireWake() {
+        val p = SoriService.prefs(this)
+        if (p.getBoolean("wakeRetired23", false)) return
+        val was = p.getBoolean("wakeOn", false)
+        p.edit().putBoolean("wakeOn", false).putBoolean("wakeRetired23", true).apply()
+        if (was && SoriService.instance != null) {
+            try { startService(Intent(this, SoriService::class.java).setAction("wake_off")) } catch (e: Exception) { }
+        }
+    }
+
     /* ── ① 이름 부르기 대기 켜기·끄기 ── */
     fun setWake(on: Boolean, name: String, token: String) {
+        /* v23: 이름 부르기 대기는 쓰지 않음 — TV·설교 같은 주변 말소리에 잘못 반응해서. 켜기 요청도 끄기로 처리
+           (대화 시작은 coverfo 홈의 소리 단추 한 번 · 떠 있는 아이콘 · 바로가기) */
+        if (on) { setWake(false, name, token); return }
         val p = SoriService.prefs(this)
         if (name.isNotBlank()) {
             val clean = name.filter { it.isLetterOrDigit() }.take(10)
@@ -494,6 +508,7 @@ class MainActivity : Activity() {
         resumed = true
         current = this
         SoriService.instance?.hideBubble()
+        retireWake()
         /* 이름 대기를 켜 두었는데 서비스가 없으면(폰을 껐다 켰거나 앱이 정리됐을 때) 화면이 보일 때 다시 켠다 */
         if (SoriService.prefs(this).getBoolean("wakeOn", false) && SoriService.instance == null &&
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
@@ -599,6 +614,12 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun isForeground(): Boolean = resumed
+
+        /* v23 🎨 소리 모습: 웹에서 고른 큐브 색(1~8 · 0 = 예전 보라 🗣️) → 다른 앱 위 아이콘도 같은 큐브 */
+        @JavascriptInterface
+        fun setChar(n: Int) {
+            SoriService.prefs(this@MainActivity).edit().putInt("chr", if (n in 1..8) n else 0).apply()
+        }
 
         /* 카카오내비 바로 안내 (카카오 공식 Android SDK). 돌려주는 값: ok · noapp(카카오내비 없음) · err:… */
         @JavascriptInterface
