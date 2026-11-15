@@ -15,7 +15,9 @@ android {
     defaultConfig {
         applicationId = "com.coverfo.sori"
         minSdk = 26
-        targetSdk = 35
+        /* v27 구글 플레이: 새 앱·업데이트는 Android 16(API 36) 이상을 대상으로 해야 올라간다 (2026-08-31부터).
+           컴파일 SDK 는 35 그대로 (지금 빌드 도구 AGP 8.7.3 과 맞게) — 대상 숫자만 36 */
+        targetSdk = 36
         versionCode = runNo
         versionName = "1.0.$runNo"
         /* 음성 인식(Vosk)·JNA 의 기기용 파일은 요즘 폰(ARM)용만 넣어 설치 파일을 작게 */

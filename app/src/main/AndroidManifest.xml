@@ -82,8 +82,10 @@
         </intent>
     </queries>
 
+    <!-- v27: 대상 API 36 에서는 뒤로가기(onBackPressed)가 기본으로 불리지 않는다 → enableOnBackInvokedCallback="false" 로 지금처럼 뒤로가기를 받는다 -->
     <application
         android:allowBackup="false"
+        android:enableOnBackInvokedCallback="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"

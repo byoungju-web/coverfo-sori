@@ -109,8 +109,22 @@ class MainActivity : Activity() {
                 return handleUrl(request.url.toString())
             }
 
+            /* v27 🛒 화면 안 이동(주소만 바뀌는 경우 포함)으로 충전 화면 등이 열리면 되돌린다 · 스크립트도 다시 넣는다 */
+            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                super.doUpdateVisitedHistory(view, url, isReload)
+                if (!BuildConfig.STORE) return
+                if (StoreGuard.blocked(url)) {
+                    storeBlocked()
+                    view.post { if (view.canGoBack()) view.goBack() else view.loadUrl(HOME) }
+                    return
+                }
+                view.evaluateJavascript(StoreGuard.JS, null)
+            }
+
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
+                /* v27 🛒 구글 플레이판: 충전·앱 내려받기·사람끼리 채팅을 화면에서 뺀다 (APK판은 그대로) */
+                if (BuildConfig.STORE) view.evaluateJavascript(StoreGuard.JS, null)
                 pendingLogin?.let { p ->
                     pendingLogin = null
                     /* 로그인 스크립트(supabase)가 준비될 시간을 조금 준다 */
@@ -168,7 +182,13 @@ class MainActivity : Activity() {
     }
 
     /* ── 주소 처리: coverfo·로그인은 안에서, 나머지는 그 앱(카카오맵·카카오내비·쿠팡…)이나 브라우저로 ── */
+    /* v27 🛒 구글 플레이판에서 열 수 없는 화면 */
+    private fun storeBlocked() {
+        runOnUiThread { try { android.widget.Toast.makeText(this, "구글 플레이 앱에서는 열 수 없는 화면이에요", android.widget.Toast.LENGTH_SHORT).show() } catch (e: Exception) { } }
+    }
+
     fun handleUrl(u: String): Boolean {
+        if (StoreGuard.blocked(u)) { storeBlocked(); return true }
         val uri = Uri.parse(u)
         val scheme = (uri.scheme ?: "").lowercase()
         if (scheme == "http" || scheme == "https") {
