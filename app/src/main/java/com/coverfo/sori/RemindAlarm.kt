@@ -111,7 +111,7 @@ object RemindAlarm {
         }
     }
 
-    /** 다음 시각 (서버 hub.js remindNext 와 같은 규칙). 한 번짜리는 0 */
+    /** 다음 시각 (서버 hub.js remindNext 와 같은 규칙 · v25 매년 추가). 한 번짜리는 0 */
     private fun nextOf(o: JSONObject, from: Long, now: Long): Long {
         val kind = o.optString("kind")
         if (kind == "once") return 0L
@@ -128,6 +128,15 @@ object RemindAlarm {
                     c.timeInMillis = t
                     c.set(Calendar.DAY_OF_MONTH, 1)
                     c.add(Calendar.MONTH, 1)
+                    val dom = o.optInt("dom", 1).coerceIn(1, 31)
+                    c.set(Calendar.DAY_OF_MONTH, minOf(dom, c.getActualMaximum(Calendar.DAY_OF_MONTH)))
+                    t = c.timeInMillis
+                }
+                "yearly" -> {   // v25 🎂 매년 기념일: 같은 달·같은 날 (2월 29일은 평년 28일)
+                    val c = Calendar.getInstance(SimpleTimeZone(off * 60_000, "cf"))
+                    c.timeInMillis = t
+                    c.set(Calendar.DAY_OF_MONTH, 1)
+                    c.add(Calendar.YEAR, 1)
                     val dom = o.optInt("dom", 1).coerceIn(1, 31)
                     c.set(Calendar.DAY_OF_MONTH, minOf(dom, c.getActualMaximum(Calendar.DAY_OF_MONTH)))
                     t = c.timeInMillis
