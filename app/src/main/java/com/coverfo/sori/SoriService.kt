@@ -20,7 +20,6 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.ToneGenerator
 import android.media.audiofx.AcousticEchoCanceler
-import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -53,6 +52,10 @@ import java.util.concurrent.TimeUnit
  * · v5 커넥션 허브 2.0: run_relay · relay_answer 를 이 서비스가 /api/hub 로 직접 실행 (캘린더→드라이브→요약 문서→메일·카톡).
  *   남에게 보내기 전에는 서버가 status "confirm" 을 돌려주고, 비서가 말로 묻고, 대답(relay_answer)을 다시 서버로 보낸다.
  *   끝나면 카톡 보내기는 KakaoSend (1탭 / APK판은 자동 보내기)로 폰에서 한다.
+ * · v26 🎙 화면에서 시작한 대화는 coverfo 웹과 같은 WebRTC(RtcLink)로 연결 — 브라우저와 같은 마이크 처리.
+ *   WebRTC 가 실패하면 예전 WebSocket 으로 연결하고, 24시간 동안은 WebSocket 만 쓴다.
+ *   '소리야'로 부른 대화는 이름 뒤에 들은 말을 먼저 보내야 해서 WebSocket 그대로.
+ *   WebSocket 방식도 휴대폰 자체 잡음 제거(NoiseSuppressor)는 끈다 (서버 잡음 줄이기와 두 번 걸리지 않게 · 에코 제거는 그대로).
  */
 class SoriService : Service(), WakeListener.Callback {
 
@@ -82,6 +85,7 @@ class SoriService : Service(), WakeListener.Callback {
         .build()
     private val main = Handler(Looper.getMainLooper())
     private var ws: WebSocket? = null
+    @Volatile private var rtc: RtcLink? = null     // v26 WebRTC 연결 (없으면 WebSocket)
     private var rec: AudioRecord? = null
     private var recRate = RATE
     private var track: AudioTrack? = null
@@ -335,6 +339,9 @@ class SoriService : Service(), WakeListener.Callback {
             if (ScreenHelper.installed(this)) body.put("screen", 1)
             /* v20 📞 연락처 찾기 · 바로 전화 · 문자 채워서 열기 도구를 받는다 */
             body.put("phone", 1)
+            /* v26: 화면에서 시작한 대화는 WebRTC (최근 24시간 안에 실패했으면 WebSocket) */
+            val useRtc = !fromWake && System.currentTimeMillis() - p.getLong("rtcFailAt", 0L) > 24 * 3_600_000L
+            if (useRtc) body.put("rtc", 1)
             val (code, j) = post(body.toString())
             if (code != 200 || j == null || j.optString("key").isEmpty()) {
                 val msg = when (code) { 401 -> "로그인 후 사용할 수 있어요"; 402 -> "크레딧이 부족해요"; else -> "연결하지 못했어요" }
@@ -342,12 +349,53 @@ class SoriService : Service(), WakeListener.Callback {
                 return
             }
             cost = j.optInt("cost", 1)
+            if (useRtc && connectRtc(j.optString("key"))) return
+            if (!running) return
             val url = j.optString("url", "wss://api.openai.com/v1/realtime?model=" + j.optString("model"))
             val req = Request.Builder().url(url).header("Authorization", "Bearer " + j.optString("key")).build()
             ws = http.newWebSocket(req, Listener())
         } catch (e: Exception) {
             shutdown("연결하지 못했어요", e.message, false)
         }
+    }
+
+    /* ── v26 WebRTC 연결 ── 성공하면 true. 실패하면 정리하고 false (→ WebSocket 으로) */
+    private fun connectRtc(key: String): Boolean {
+        if (key.isEmpty()) return false
+        /* 이름 대기용 마이크를 먼저 놓고, 통화 모드 · 스피커(이어폰) 쪽으로 */
+        wake?.let { it.stop(); it.join(800); wake = null }
+        try {
+            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            routeOutput(am)
+        } catch (e: Exception) { }
+        val link = RtcLink(this, object : RtcLink.Callback {
+            override fun onRtcOpen() {
+                main.post {
+                    if (!running) return@post
+                    state("live", null)
+                    if (MainActivity.current?.resumed != true) showBubble()
+                    lastActive = System.currentTimeMillis()
+                    main.postDelayed(tick, 60_000)
+                    main.postDelayed(idle, 1_000)
+                }
+            }
+            override fun onRtcMessage(text: String) { handleEvent(text) }
+            override fun onRtcClosed(reason: String?) { shutdown("연결이 끊겼어요", reason, false) }
+        })
+        rtc = link
+        val err = link.start(key, http)
+        if (err == null) {
+            if (!running) { link.close(); rtc = null }
+            return true
+        }
+        link.close()
+        rtc = null
+        if (!running) return true      // 연결 중에 '끝내기'를 눌렀으면 실패로 치지 않는다
+        prefs(this).edit().putLong("rtcFailAt", System.currentTimeMillis()).apply()
+        emit(JSONObject().put("type", "sori.log").put("text", "ℹ️ 기본 연결 방식으로 바꿔 연결해요").toString())
+        android.util.Log.w("SoriRtc", err)
+        return false
     }
 
     private inner class Listener : WebSocketListener() {
@@ -386,6 +434,20 @@ class SoriService : Service(), WakeListener.Callback {
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
+            handleEvent(text)
+        }
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            shutdown("연결이 끊겼어요", t.message, false)
+        }
+
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            shutdown("대화를 마쳤어요", null, false)
+        }
+    }
+
+    /* OpenAI 에서 온 이벤트 처리 (WebSocket · WebRTC 데이터 채널 공통) */
+    private fun handleEvent(text: String) {
             val ev = try { JSONObject(text) } catch (e: Exception) { return }
             when (val type = ev.optString("type")) {
                 "response.output_audio.delta", "response.audio.delta" -> {
@@ -394,6 +456,18 @@ class SoriService : Service(), WakeListener.Callback {
                     if (d.isNotEmpty()) {
                         try { playQ.offer(Base64.decode(d, Base64.DEFAULT)) } catch (e: Exception) { }
                     }
+                }
+                /* v26 WebRTC: 목소리 재생 시작·끝을 서버가 알려 준다 (WebSocket 때는 앱의 재생 스레드가 직접 보냄) */
+                "output_audio_buffer.started" -> {
+                    lastActive = System.currentTimeMillis()
+                    playing = true
+                    bubble?.speaking(true)
+                    emit(text)
+                }
+                "output_audio_buffer.stopped", "output_audio_buffer.cleared" -> {
+                    lastActive = System.currentTimeMillis()
+                    if (playing) { playing = false; bubble?.speaking(false) }
+                    emit(text)
                 }
                 "input_audio_buffer.speech_started" -> {
                     lastActive = System.currentTimeMillis()
@@ -450,15 +524,6 @@ class SoriService : Service(), WakeListener.Callback {
                     emit(text)
                 }
             }
-        }
-
-        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            shutdown("연결이 끊겼어요", t.message, false)
-        }
-
-        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            shutdown("대화를 마쳤어요", null, false)
-        }
     }
 
     /* ── v8 웹 검색 (/api/talk-live op:"search" · Brave · 무료) ── 결과를 비서에게 돌려주고 화면에도 보낸다 (sori.search) */
@@ -810,6 +875,8 @@ class SoriService : Service(), WakeListener.Callback {
 
     /* 웹 화면이 보내는 것(function_call_output 등)을 그대로 OpenAI 로 */
     fun sendRaw(json: String) {
+        val r = rtc
+        if (r != null) { r.send(json); return }
         try { ws?.send(json) } catch (e: Exception) { }
     }
 
@@ -876,7 +943,7 @@ class SoriService : Service(), WakeListener.Callback {
         }
         val ar = rec ?: return false
         try { if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(ar.audioSessionId)?.setEnabled(true) } catch (e: Exception) { }
-        try { if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(ar.audioSessionId)?.setEnabled(true) } catch (e: Exception) { }
+        /* v26: 휴대폰 자체 잡음 제거(NoiseSuppressor)는 켜지 않는다 — 서버(OpenAI) 잡음 줄이기와 두 번 걸리면 말소리까지 깎일 수 있어서 */
 
         val outMin = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val at = AudioTrack.Builder()
@@ -1042,6 +1109,8 @@ class SoriService : Service(), WakeListener.Callback {
             main.removeCallbacks(idle)
             try { ws?.close(1000, null) } catch (e: Exception) { }
             ws = null
+            rtc?.close()
+            rtc = null
             try { rec?.stop() } catch (e: Exception) { }
             try { rec?.release() } catch (e: Exception) { }
             rec = null

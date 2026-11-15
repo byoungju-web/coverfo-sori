@@ -73,4 +73,6 @@ dependencies {
     /* ① 이름 부르기: 폰 안에서만 도는 음성 인식 Vosk (Apache 2.0) — 공식 예제(vosk-android-demo)와 같은 버전 */
     implementation("net.java.dev.jna:jna:5.18.1@aar")
     implementation("com.alphacephei:vosk-android:0.3.75@aar")
+    /* v26 🎙 WebRTC (coverfo 웹과 같은 연결 · 브라우저와 같은 마이크 처리) — Google WebRTC 를 그대로 묶어 배포하는 Stream 판 (Apache 2.0 · 패키지 org.webrtc) */
+    implementation("io.getstream:stream-webrtc-android:1.3.9")
 }
