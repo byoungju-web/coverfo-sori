@@ -8,4 +8,30 @@
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
+    <!-- v28 🎧 오디오·스트림 번역 (APK판만 · 구글 플레이판은 '화면 녹화' 서비스 신고가 따로 필요해서 넣지 않음)
+         폰에서 나오는 다른 앱 소리(유튜브 등)를 받아 번역 — 포도랑 앱의 같은 기능을 옮겨 옴.
+         coverfo.com 화면이 coverfosori://audio?from=&to=&tk= 로 엽니다. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
+    <application>
+        <activity
+            android:name=".AudioActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:label="@string/audioTitle"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="coverfosori" android:host="audio" />
+            </intent-filter>
+        </activity>
+        <service
+            android:name=".AudioCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+    </application>
+
 </manifest>

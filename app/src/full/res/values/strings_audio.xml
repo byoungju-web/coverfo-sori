@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- coverfo 소리 v28 오디오·스트림 번역 (APK판 full 만) — 포도랑 앱 글을 옮겨 coverfo 에 맞게 고침 -->
+<resources>
+    <string name="audioTitle">오디오·스트림 번역</string>
+    <string name="audioBack">소리</string>
+    <string name="audioIdle">시작을 누르면 폰에서 나오는 소리를 번역해요</string>
+    <string name="audioStart">번역 시작</string>
+    <string name="audioStop">끝내기</string>
+    <string name="audioStopped">끝났어요</string>
+    <string name="audioListening">듣는 중 · 유튜브나 영상 앱으로 가서 재생하세요</string>
+    <string name="audioNotiStart">소리를 받을 준비를 하고 있어요</string>
+    <string name="audioPrice">1분 0.5 크레딧 · 소리가 없는 동안은 요금 없음</string>
+    <string name="audioOverlay">다른 앱 위에 자막 띄우기</string>
+    <string name="audioOverlayPerm">\'다른 앱 위에 표시\'에서 coverfo 소리를 허용한 뒤 돌아와 다시 켜 주세요</string>
+    <string name="audioOverlayNext">자막 띄우기는 다음에 시작할 때부터 적용돼요</string>
+    <string name="audioOverlayWait">coverfo 자막 · 소리를 기다리는 중 (두 번 누르면 숨김)</string>
+    <string name="audioNote">· 유튜브 · 영상 · 라이브 방송 등 폰에서 재생되는 소리를 받아 위에서 고른 언어로 번역해요.\n· 시작할 때 \'화면 녹화 · 공유\' 허락 창이 떠요. coverfo 소리는 화면은 쓰지 않고 소리만 받아요.\n· 소리를 막아 둔 앱(일부 영화 앱 등)과 통화 소리는 번역할 수 없어요.\n· 소리는 번역에만 쓰고 저장하지 않아요.\n· 언어를 바꾸려면 coverfo 홈 [AI에게 물어보기 → 오디오·스트림 번역] 위쪽에서 고른 뒤 다시 여세요.</string>
+    <string name="audioNeed10">안드로이드 10 이상에서만 쓸 수 있어요</string>
+    <string name="audioNeedLogin">coverfo 에 로그인한 뒤 홈 [AI에게 물어보기 → 오디오·스트림 번역]에서 다시 열어 주세요</string>
+    <string name="audioNeedMic">소리를 받으려면 마이크(녹음) 권한이 필요해요</string>
+    <string name="audioDenied">허락하지 않아서 시작하지 못했어요</string>
+    <string name="audioFail">소리를 받지 못했어요</string>
+    <string name="audioNet">인터넷 연결을 확인해 주세요 · 계속 듣는 중</string>
+    <string name="audioNoCredit">크레딧이 모자라 멈췄어요. coverfo 이용료 · 요금제에서 충전해 주세요</string>
+</resources>
