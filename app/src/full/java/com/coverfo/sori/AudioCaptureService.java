@@ -60,7 +60,10 @@ public class AudioCaptureService extends Service {
     private static final int MAX_MS = 11800, MIN_MS = 4000, QUIET_MS = 700, EMPTY_MS = 6000;
 
     /* ---------- 화면(AudioActivity)과 주고받기 ---------- */
-    public static class Seg { public String text, tr; Seg(String a, String b) { text = a; tr = b; } }
+    /* v1.0.7 · 소리 v29: 항목마다 제목(번호 · 받은 시각)과 삭제 — at = 받은 시각, no = 번호(지워도 안 바뀜) */
+    public static class Seg { public String text, tr; public long at; public int no; Seg(String a, String b) { text = a; tr = b; at = System.currentTimeMillis(); no = ++segNo; } }
+    static int segNo = 0;
+    static void removeSeg(Seg g) { synchronized (SEGS) { SEGS.remove(g); } fire(); }
     public interface Listener { void onState(); }
     static final List<Seg> SEGS = new ArrayList<>();
     static volatile boolean running = false;
@@ -133,7 +136,7 @@ public class AudioCaptureService extends Service {
                 .build();
         if (record.getState() != AudioRecord.STATE_INITIALIZED) { stopAll(getString(R.string.audioFail)); return; }
 
-        synchronized (SEGS) { SEGS.clear(); }
+        synchronized (SEGS) { SEGS.clear(); segNo = 0; }
         sec = 0; charged = 0;
         running = true;
         status = getString(R.string.audioListening);

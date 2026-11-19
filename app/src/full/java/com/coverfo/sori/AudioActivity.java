@@ -206,6 +206,18 @@ public class AudioActivity extends Activity implements AudioCaptureService.Liste
                 LinearLayout c2 = card();
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
                 lp.topMargin = dp(10);
+                /* v1.0.7 · 소리 v29: 제목 줄 (번호 · 받은 시각) + 오른쪽 [삭제] */
+                LinearLayout head = new LinearLayout(this);
+                head.setOrientation(LinearLayout.HORIZONTAL);
+                head.setGravity(Gravity.CENTER_VERTICAL);
+                TextView tt = text(g2.no + "번 · " + new java.text.SimpleDateFormat("HH:mm:ss", Locale.KOREA).format(new java.util.Date(g2.at)), 13, C1, true);
+                head.addView(tt, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                TextView del = text("삭제", 13, 0xFFDC2626, true);
+                del.setPadding(dp(12), dp(6), dp(4), dp(6));
+                final AudioCaptureService.Seg target = g2;
+                del.setOnClickListener(v -> { AudioCaptureService.removeSeg(target); shown = -1; refresh(); });
+                head.addView(del);
+                c2.addView(head);
                 c2.addView(text(g2.text, 13, SUB, false));
                 TextView d = text(g2.tr == null || g2.tr.isEmpty() ? g2.text : g2.tr, 17, FG, true);
                 d.setPadding(0, dp(4), 0, 0);
