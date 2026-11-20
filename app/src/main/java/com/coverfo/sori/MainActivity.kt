@@ -59,7 +59,13 @@ class MainActivity : Activity() {
         /* 이 앱 안(웹뷰)에서 그대로 여는 곳: coverfo 와 로그인(카카오·네이버·애플·수파베이스) */
         private val INSIDE = listOf("coverfo.com", "podotalk.kr", "supabase.co", "kauth.kakao.com", "accounts.kakao.com",
             "logins.daum.net", "nid.naver.com", "appleid.apple.com", "accounts.google.com")
+        /* v30 🏨 Hotels.com 은 이 앱 안(웹 화면)에서 연다 — 휴대폰에 넘기면 Hotels.com 앱이 열리는데,
+           제휴 링크로 들어간 검색 결과에서 호텔을 누르면 상세가 빈 화면이 됨 (웹에서는 정상 — 이용자 폰 확인) */
+        private val TRAVEL_IN = listOf("hotels.com")
     }
+
+    /* v30 Hotels.com 화면을 앱 안에서 보는 동안에는 그 사이트 안의 이동(예약 단계 포함)도 앱 안에서 — coverfo 로 돌아오면 끝 */
+    @Volatile private var travelIn = false
 
     lateinit var web: WebView
     @Volatile var resumed = false
@@ -112,6 +118,8 @@ class MainActivity : Activity() {
             /* v27 🛒 화면 안 이동(주소만 바뀌는 경우 포함)으로 충전 화면 등이 열리면 되돌린다 · 스크립트도 다시 넣는다 */
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
                 super.doUpdateVisitedHistory(view, url, isReload)
+                /* v30 🏨 뒤로가기 등으로 coverfo 화면에 돌아오면 Hotels.com 안 보기 끝 */
+                try { val h = (Uri.parse(url ?: "").host ?: "").lowercase(); if (h == "coverfo.com" || h.endsWith(".coverfo.com")) travelIn = false } catch (e: Exception) { }
                 if (!BuildConfig.STORE) return
                 if (StoreGuard.blocked(url)) {
                     storeBlocked()
@@ -209,7 +217,12 @@ class MainActivity : Activity() {
                 }
                 return true
             }
-            if (INSIDE.any { host == it || host.endsWith(".$it") }) return false
+            if (INSIDE.any { host == it || host.endsWith(".$it") }) {
+                if (host == "coverfo.com" || host.endsWith(".coverfo.com")) travelIn = false
+                return false
+            }
+            if (TRAVEL_IN.any { host == it || host.endsWith(".$it") }) { travelIn = true; return false }   /* v30 🏨 */
+            if (travelIn) return false   /* v30 🏨 Hotels.com 안에서 이어지는 이동 */
             openExternal(Intent(Intent.ACTION_VIEW, uri))
             return true
         }
