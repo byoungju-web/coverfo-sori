@@ -62,10 +62,14 @@ class MainActivity : Activity() {
         /* v30 🏨 Hotels.com 은 이 앱 안(웹 화면)에서 연다 — 휴대폰에 넘기면 Hotels.com 앱이 열리는데,
            제휴 링크로 들어간 검색 결과에서 호텔을 누르면 상세가 빈 화면이 됨 (웹에서는 정상 — 이용자 폰 확인) */
         private val TRAVEL_IN = listOf("hotels.com")
+        /* v31 ✈️🚗 익스피디아 제휴 링크(expedia.com/affiliate)는 앱 안에서 넘겨받고, 넘어간 최종 주소(expedia.co.kr …)만 익스피디아 앱으로.
+           전에는 제휴 링크를 바로 휴대폰에 넘겨서 크롬이 잠깐 열렸다 익스피디아 앱으로 넘어갔음 (크롬의 마지막 탭이 번쩍 보임 — 이용자 폰 확인) */
+        private val HOP_IN = listOf("prf.hn")
     }
 
     /* v30 Hotels.com 화면을 앱 안에서 보는 동안에는 그 사이트 안의 이동(예약 단계 포함)도 앱 안에서 — coverfo 로 돌아오면 끝 */
     @Volatile private var travelIn = false
+    @Volatile private var hop = false   /* v31 제휴 링크를 앱 안에서 넘겨받는 중 */
 
     lateinit var web: WebView
     @Volatile var resumed = false
@@ -119,7 +123,7 @@ class MainActivity : Activity() {
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
                 super.doUpdateVisitedHistory(view, url, isReload)
                 /* v30 🏨 뒤로가기 등으로 coverfo 화면에 돌아오면 Hotels.com 안 보기 끝 */
-                try { val h = (Uri.parse(url ?: "").host ?: "").lowercase(); if (h == "coverfo.com" || h.endsWith(".coverfo.com")) travelIn = false } catch (e: Exception) { }
+                try { val h = (Uri.parse(url ?: "").host ?: "").lowercase(); if (h == "coverfo.com" || h.endsWith(".coverfo.com")) { travelIn = false; hop = false } } catch (e: Exception) { }
                 if (!BuildConfig.STORE) return
                 if (StoreGuard.blocked(url)) {
                     storeBlocked()
@@ -223,7 +227,13 @@ class MainActivity : Activity() {
             }
             if (TRAVEL_IN.any { host == it || host.endsWith(".$it") }) { travelIn = true; return false }   /* v30 🏨 */
             if (travelIn) return false   /* v30 🏨 Hotels.com 안에서 이어지는 이동 */
+            /* v31 ✈️🚗 */
+            if (((host == "expedia.com" || host == "www.expedia.com") && (uri.path ?: "").startsWith("/affiliate")) || HOP_IN.any { host == it || host.endsWith(".$it") }) { hop = true; return false }
             openExternal(Intent(Intent.ACTION_VIEW, uri))
+            if (hop) {   /* v31 넘겨받기가 끝나 최종 주소를 앱으로 넘겼으면, 이 앱 화면은 coverfo 그대로 (빈 화면이 남았으면 되돌림) */
+                hop = false
+                web.post { try { val h = (Uri.parse(web.url ?: "").host ?: "").lowercase(); if (!(h == "coverfo.com" || h.endsWith(".coverfo.com")) && web.canGoBack()) web.goBack() } catch (e: Exception) { } }
+            }
             return true
         }
         if (scheme == "intent") {
