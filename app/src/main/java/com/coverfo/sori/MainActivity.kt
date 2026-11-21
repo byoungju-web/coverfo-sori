@@ -125,7 +125,7 @@ class MainActivity : Activity() {
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
                 super.doUpdateVisitedHistory(view, url, isReload)
                 /* v30 🏨 뒤로가기 등으로 coverfo 화면에 돌아오면 Hotels.com 안 보기 끝 */
-                try { val h = (Uri.parse(url ?: "").host ?: "").lowercase(); if (h == "coverfo.com" || h.endsWith(".coverfo.com")) { travelIn = false; hop = false } } catch (e: Exception) { }
+                try { val h = (Uri.parse(url ?: "").host ?: "").lowercase(); if (h == "coverfo.com" || h.endsWith(".coverfo.com")) { if (travelIn) SoriService.instance?.hideBubble(); travelIn = false; hop = false } } catch (e: Exception) { }
                 if (!BuildConfig.STORE) return
                 if (StoreGuard.blocked(url)) {
                     storeBlocked()
@@ -224,10 +224,14 @@ class MainActivity : Activity() {
                 return true
             }
             if (INSIDE.any { host == it || host.endsWith(".$it") }) {
-                if (host == "coverfo.com" || host.endsWith(".coverfo.com")) travelIn = false
+                if (host == "coverfo.com" || host.endsWith(".coverfo.com")) { if (travelIn) SoriService.instance?.hideBubble(); travelIn = false }
                 return false
             }
-            if (TRAVEL_IN.any { host == it || host.endsWith(".$it") }) { travelIn = true; return false }   /* v30 🏨 */
+            if (TRAVEL_IN.any { host == it || host.endsWith(".$it") }) {   /* v30 🏨 */
+                travelIn = true
+                SoriService.instance?.showBubble()   /* v33 🏨 앱 안 Hotels.com 화면에도 소리 아이콘 (익스피디아 앱 위처럼) */
+                return false
+            }
             if (travelIn) return false   /* v30 🏨 Hotels.com 안에서 이어지는 이동 */
             /* v31 ✈️🚗 */
             if (((host == "expedia.com" || host == "www.expedia.com") && (uri.path ?: "").startsWith("/affiliate")) || HOP_IN.any { host == it || host.endsWith(".$it") }) { hop = true; return false }
@@ -552,7 +556,7 @@ class MainActivity : Activity() {
         super.onResume()
         resumed = true
         current = this
-        SoriService.instance?.hideBubble()
+        if (travelIn) SoriService.instance?.showBubble() else SoriService.instance?.hideBubble()   /* v33 🏨 Hotels.com 을 앱 안에서 보는 중이면 아이콘 유지 */
         retireWake()
         /* 이름 대기를 켜 두었는데 서비스가 없으면(폰을 껐다 켰거나 앱이 정리됐을 때) 화면이 보일 때 다시 켠다 */
         if (SoriService.prefs(this).getBoolean("wakeOn", false) && SoriService.instance == null &&
@@ -598,7 +602,8 @@ class MainActivity : Activity() {
             pendingLogin?.let { p -> pendingLogin = null; js("window.cfAppSession&&window.cfAppSession($p)") }
             return
         }
-        if (intent.getBooleanExtra("openChat", false)) js("window.cfLiveOpen&&window.cfLiveOpen()")
+        /* v33 Hotels.com 화면에서 아이콘을 누르면 coverfo 로 돌아와 소리 대화 창 */
+        if (intent.getBooleanExtra("openChat", false)) js("window.cfLiveOpen?window.cfLiveOpen():(location.href='https://coverfo.com/?sori=talk')")
         /* v8 🗣️ 바로가기(소리와 대화): 앱이 이미 열려 있으면 화면을 다시 읽지 않고 바로 대화 시작 (대화 중이면 창만 연다) */
         if (intent.dataString?.startsWith("https://coverfo.com/?sori=talk") == true) {
             js("window.cfLiveTalk?window.cfLiveTalk():(location.href='https://coverfo.com/?sori=talk')")
