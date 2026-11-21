@@ -88,7 +88,7 @@ class MainActivity : Activity() {
         hideTravelBubble(); travelAt = 0L
         try {
             startActivity(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_VIEW)
-                .setData(Uri.parse("https://coverfo.com/?sori=talk"))   /* v35 누르면 소리 대화 모드 (예전처럼) */
+                .setData(Uri.parse("https://coverfo.com/?sori=mic"))   /* v36 누르면 coverfo 로 돌아와 홈 🎙 받아쓰기(빠르고 잘 알아들음) → 바로 실행 */
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
         } catch (e: Exception) { }
     }
