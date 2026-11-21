@@ -70,6 +70,28 @@ class MainActivity : Activity() {
     /* v30 Hotels.com 화면을 앱 안에서 보는 동안에는 그 사이트 안의 이동(예약 단계 포함)도 앱 안에서 — coverfo 로 돌아오면 끝 */
     @Volatile private var travelIn = false
     @Volatile private var hop = false   /* v31 제휴 링크를 앱 안에서 넘겨받는 중 */
+    /* v34 ✈️🏨🚗 여행 화면(익스피디아 앱 · 앱 안 Hotels.com) 위 소리 아이콘 — 소리 대화를 켜지 않고 🎙 로 시켜도 뜬다.
+       (전에는 소리 대화(서비스)가 켜져 있을 때만 떴음) · 누르면 coverfo 로 돌아와 🎙 바로 듣기 */
+    @Volatile private var travelAt = 0L
+    private var tBubble: Bubble? = null
+    private fun showTravelBubble() {
+        runOnUiThread {
+            try {
+                if (tBubble != null || SoriService.instance?.running == true) return@runOnUiThread
+                if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this)) return@runOnUiThread
+                tBubble = Bubble(applicationContext) { travelTap() }.also { it.show(); it.standby(false) }
+            } catch (e: Exception) { tBubble = null }
+        }
+    }
+    private fun hideTravelBubble() { runOnUiThread { try { tBubble?.hide() } catch (e: Exception) { }; tBubble = null } }
+    private fun travelTap() {
+        hideTravelBubble(); travelAt = 0L
+        try {
+            startActivity(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_VIEW)
+                .setData(Uri.parse("https://coverfo.com/?sori=mic"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+        } catch (e: Exception) { }
+    }
 
     lateinit var web: WebView
     @Volatile var resumed = false
@@ -125,7 +147,7 @@ class MainActivity : Activity() {
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
                 super.doUpdateVisitedHistory(view, url, isReload)
                 /* v30 🏨 뒤로가기 등으로 coverfo 화면에 돌아오면 Hotels.com 안 보기 끝 */
-                try { val h = (Uri.parse(url ?: "").host ?: "").lowercase(); if (h == "coverfo.com" || h.endsWith(".coverfo.com")) { if (travelIn) SoriService.instance?.hideBubble(); travelIn = false; hop = false } } catch (e: Exception) { }
+                try { val h = (Uri.parse(url ?: "").host ?: "").lowercase(); if (h == "coverfo.com" || h.endsWith(".coverfo.com")) { if (travelIn) { SoriService.instance?.hideBubble(); hideTravelBubble() }; travelIn = false; hop = false } } catch (e: Exception) { }
                 if (!BuildConfig.STORE) return
                 if (StoreGuard.blocked(url)) {
                     storeBlocked()
@@ -224,17 +246,19 @@ class MainActivity : Activity() {
                 return true
             }
             if (INSIDE.any { host == it || host.endsWith(".$it") }) {
-                if (host == "coverfo.com" || host.endsWith(".coverfo.com")) { if (travelIn) SoriService.instance?.hideBubble(); travelIn = false }
+                if (host == "coverfo.com" || host.endsWith(".coverfo.com")) { if (travelIn) { SoriService.instance?.hideBubble(); hideTravelBubble() }; travelIn = false }
                 return false
             }
             if (TRAVEL_IN.any { host == it || host.endsWith(".$it") }) {   /* v30 🏨 */
                 travelIn = true
                 SoriService.instance?.showBubble()   /* v33 🏨 앱 안 Hotels.com 화면에도 소리 아이콘 (익스피디아 앱 위처럼) */
+                showTravelBubble()   /* v34 소리 대화가 꺼져 있어도 */
                 return false
             }
             if (travelIn) return false   /* v30 🏨 Hotels.com 안에서 이어지는 이동 */
             /* v31 ✈️🚗 */
-            if (((host == "expedia.com" || host == "www.expedia.com") && (uri.path ?: "").startsWith("/affiliate")) || HOP_IN.any { host == it || host.endsWith(".$it") }) { hop = true; return false }
+            if (((host == "expedia.com" || host == "www.expedia.com") && (uri.path ?: "").startsWith("/affiliate")) || HOP_IN.any { host == it || host.endsWith(".$it") }) { hop = true; travelAt = System.currentTimeMillis(); return false }
+            if (host.contains("expedia.") || host.endsWith("hotels.com")) travelAt = System.currentTimeMillis()   /* v34 */
             openExternal(Intent(Intent.ACTION_VIEW, uri))
             if (hop) {   /* v31 넘겨받기가 끝나 최종 주소를 앱으로 넘겼으면, 이 앱 화면은 coverfo 그대로 (빈 화면이 남았으면 되돌림) */
                 hop = false
@@ -556,7 +580,7 @@ class MainActivity : Activity() {
         super.onResume()
         resumed = true
         current = this
-        if (travelIn) SoriService.instance?.showBubble() else SoriService.instance?.hideBubble()   /* v33 🏨 Hotels.com 을 앱 안에서 보는 중이면 아이콘 유지 */
+        if (travelIn) { SoriService.instance?.showBubble(); showTravelBubble() } else { SoriService.instance?.hideBubble(); hideTravelBubble() }   /* v33 🏨 · v34 */
         retireWake()
         /* 이름 대기를 켜 두었는데 서비스가 없으면(폰을 껐다 켰거나 앱이 정리됐을 때) 화면이 보일 때 다시 켠다 */
         if (SoriService.prefs(this).getBoolean("wakeOn", false) && SoriService.instance == null &&
@@ -578,6 +602,8 @@ class MainActivity : Activity() {
         resumed = false
         /* 다른 앱으로 넘어가면(대화 중일 때) 다른 앱 위에 🗣️ 아이콘 */
         SoriService.instance?.showBubble()
+        /* v34 coverfo 가 방금(20초 안) 여행 화면(익스피디아 등)을 열어 넘어간 거면 소리 대화가 꺼져 있어도 아이콘 */
+        if (System.currentTimeMillis() - travelAt < 20_000L) showTravelBubble()
     }
 
     /* coverfosori://login?at=…&rt=… (또는 ?code=…) → 화면(웹)에 로그인 값 전달 */
@@ -604,6 +630,11 @@ class MainActivity : Activity() {
         }
         /* v33 Hotels.com 화면에서 아이콘을 누르면 coverfo 로 돌아와 소리 대화 창 */
         if (intent.getBooleanExtra("openChat", false)) js("window.cfLiveOpen?window.cfLiveOpen():(location.href='https://coverfo.com/?sori=talk')")
+        /* v34 여행 화면 위 소리 아이콘을 누르면: coverfo 홈에서 🎙 바로 듣기 */
+        if (intent.dataString?.startsWith("https://coverfo.com/?sori=mic") == true) {
+            js("(function(){var b=/coverfo\\.com${'$'}/.test(location.hostname)&&document.querySelector('button[data-cf-mic]');if(b){b.click();}else{location.href='https://coverfo.com/?sori=mic';}})()")
+            return
+        }
         /* v8 🗣️ 바로가기(소리와 대화): 앱이 이미 열려 있으면 화면을 다시 읽지 않고 바로 대화 시작 (대화 중이면 창만 연다) */
         if (intent.dataString?.startsWith("https://coverfo.com/?sori=talk") == true) {
             js("window.cfLiveTalk?window.cfLiveTalk():(location.href='https://coverfo.com/?sori=talk')")
