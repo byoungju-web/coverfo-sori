@@ -96,7 +96,9 @@ class MainActivity : Activity() {
             root.setOnApplyWindowInsetsListener { v, insets ->
                 val b = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
                 v.setPadding(b.left, b.top, b.right, b.bottom)
-                insets
+                /* v32 여백은 여기서 이미 띄웠으니 웹 화면에는 넘기지 않는다 — 넘기면 웹(env(safe-area-inset-bottom))이 한 번 더 띄워
+                   홈 하단 탭과 폰 아래 버튼 사이가 벌어짐 (크롬에서는 붙어 있음 — 이용자 폰 확인) */
+                WindowInsets.CONSUMED
             }
         }
 
