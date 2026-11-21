@@ -858,6 +858,8 @@ class MainActivity : Activity() {
             /* v8: 보낸 값만 바꾼다 (길안내 목적지만 따로 보낼 때 나라·언어가 지워지지 않게) */
             if (j.has("country")) e.putString("ctxCountry", j.optString("country").uppercase().filter { it in 'A'..'Z' }.take(2))
             if (j.has("lang")) e.putString("ctxLang", j.optString("lang").filter { it.isLetter() || it == '-' }.take(8))
+            /* v38 소리 대화 받아쓰기 언어 (홈 🎙 과 같은 값 — 예: ko-KR) */
+            if (j.has("stt")) e.putString("ctxStt", j.optString("stt").filter { it.isLetterOrDigit() || it == '-' }.take(12))
             /* v8: 마지막으로 길안내한 목적지 (이 폰에만 · 6시간 동안 소리에게 알려 줌) */
             if (j.has("navi")) e.putString("ctxNavi", j.optString("navi").replace(Regex("[\\u0000-\\u001f]"), " ").trim().take(60)).putLong("ctxNaviAt", System.currentTimeMillis())
             e.apply()

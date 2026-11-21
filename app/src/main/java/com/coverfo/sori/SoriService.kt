@@ -111,6 +111,7 @@ class SoriService : Service(), WakeListener.Callback {
     private var stt: GoogleStt? = null
     @Volatile private var gMode = false
     @Volatile private var responding = false
+    private var sttLangNow = ""
     private val hubHttp = OkHttpClient.Builder()
         .callTimeout(170, TimeUnit.SECONDS)
         .readTimeout(170, TimeUnit.SECONDS)
@@ -955,7 +956,7 @@ class SoriService : Service(), WakeListener.Callback {
 
         /* v37: 내 말은 폰 음성 인식으로 (안 되면 예전처럼 마이크 소리를 그대로 보낸다) */
         if (gMode && startGoogle()) {
-            emit(JSONObject().put("type", "sori.log").put("text", "🎙 받아쓰기: 폰 음성 인식(구글)").toString())
+            emit(JSONObject().put("type", "sori.log").put("text", "🎙 받아쓰기: 폰 음성 인식(구글 · $sttLangNow)").toString())
         } else {
             gMode = false
             if (!startMic()) { try { at.stop(); at.release() } catch (e: Exception) { }; track = null; return false }
@@ -978,7 +979,10 @@ class SoriService : Service(), WakeListener.Callback {
     /* v37 폰 음성 인식 시작 (메인 스레드) */
     private fun startGoogle(): Boolean {
         return try {
-            val g = GoogleStt(this, GoogleStt.langTag(prefs(this).getString("ctxLang", "") ?: ""), object : GoogleStt.Cb {
+            /* v38 받아쓰기 언어 = 홈 🎙 과 같은 값(ctxStt). 없으면 폰 언어. (v37 은 화면 표시 언어 ctxLang 을 써서 영어로 받아쓰는 일이 있었음) */
+            val sttLang = (prefs(this).getString("ctxStt", "") ?: "").ifBlank { java.util.Locale.getDefault().toLanguageTag() }
+            sttLangNow = GoogleStt.langTag(sttLang)
+            val g = GoogleStt(this, sttLangNow, object : GoogleStt.Cb {
                 override fun onBegin() {
                     lastActive = System.currentTimeMillis()
                     emit("{\"type\":\"input_audio_buffer.speech_started\"}")

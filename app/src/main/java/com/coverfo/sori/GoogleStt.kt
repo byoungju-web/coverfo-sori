@@ -98,6 +98,7 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)   /* v38 고른 언어로만 받아쓰기 */
             .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, ctx.packageName)
