@@ -88,7 +88,7 @@ class MainActivity : Activity() {
         hideTravelBubble(); travelAt = 0L
         try {
             startActivity(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_VIEW)
-                .setData(Uri.parse("https://coverfo.com/?sori=mic"))
+                .setData(Uri.parse("https://coverfo.com/?sori=talk"))   /* v35 누르면 소리 대화 모드 (예전처럼) */
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
         } catch (e: Exception) { }
     }
@@ -273,6 +273,7 @@ class MainActivity : Activity() {
                 it.component = null
                 it.selector = null
                 try {
+                    travelAt = System.currentTimeMillis()   /* v35 intent:// 로 연 앱(카카오맵·카카오내비 등) 위에도 소리 아이콘 */
                     startActivity(it)
                 } catch (e: ActivityNotFoundException) {
                     val fb = it.getStringExtra("browser_fallback_url")
@@ -294,6 +295,9 @@ class MainActivity : Activity() {
     }
 
     private fun openExternal(i: Intent) {
+        /* v35 coverfo 가 연 다른 앱(지도·맛집·내비·익스피디아…) 위에도 소리 아이콘 — 전화·문자·메일·스토어는 빼고 */
+        val sc = (i.data?.scheme ?: "").lowercase()
+        if (sc !in listOf("tel", "sms", "smsto", "mailto", "market")) travelAt = System.currentTimeMillis()
         try {
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(i)
