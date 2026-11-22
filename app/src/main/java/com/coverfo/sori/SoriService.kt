@@ -67,6 +67,7 @@ class SoriService : Service(), WakeListener.Callback {
         private const val RATE = 24000
         const val DEFAULT_NAME = "소리야"
         private const val IDLE_MS = 20_000L
+        private const val DOZE_MS = 10_000L   /* v40 💤 */
 
         fun prefs(ctx: Context) = ctx.getSharedPreferences("sori", Context.MODE_PRIVATE)
         fun sttGoogle(ctx: Context): Boolean = prefs(ctx).getBoolean("sttGoogle", true)   /* v37 */
@@ -98,6 +99,10 @@ class SoriService : Service(), WakeListener.Callback {
     private var wake: WakeListener? = null
     @Volatile private var fromWake = false
     @Volatile private var lastActive = 0L
+    /* v40 💤 다른 앱(내비 등) 위에서 10초 동안 명령이 없으면 대기: 받아쓴 말 중 이름("소리야")이 있거나
+       "~해 줘"·"열어"처럼 시키는 말일 때만 소리에게 넘긴다 (내비 안내 음성·주변 말에 대답하지 않게) — 폰 음성 인식(받아쓰기) 때만 */
+    @Volatile private var dozing = false
+    @Volatile private var lastCmdAt = 0L
     @Volatile private var downloading = false
     private var wakeTest = false
     private var fgStarted = false
@@ -497,13 +502,22 @@ class SoriService : Service(), WakeListener.Callback {
                             if (name == "run_command" || name == "press_button" || name == "place_list" || name == "place_action") cmdAt = System.currentTimeMillis()
                             /* coverfo 화면을 앞으로 → 화면이 명령을 실행(지도·내비 앱 열기 등). 대화는 계속 */
                             main.post { bringToFront(false) }
-                            main.postDelayed({ emit(text) }, 700)
+                            val ma = MainActivity.current
+                            if (ma != null && !ma.onCoverfo()) ma.homeThenEmit(text)   /* v39 앱 안 Hotels.com 화면이면 coverfo 홈으로 돌아간 뒤 */
+                            else main.postDelayed({ emit(text) }, 700)
                         }
                         /* v8 웹 검색: 앱이 직접 찾아 답한다 → 내비가 앞에 떠 있어도 coverfo 를 앞으로 가져오지 않는다. 결과는 화면에 번호 단추로 */
                         "web_search" -> webSearch(ev)
                         /* v9 이전 화면: coverfo 가 앞에 있으면 화면이 처리(결과 창 닫기 · 뒤로). 다른 앱(지도·내비)이 앞이면 coverfo 화면으로 돌아온다 (대화 창은 열지 않음) */
                         "go_back" -> {
-                            if (MainActivity.current?.resumed == true) emit(text)
+                            val ma = MainActivity.current
+                            if (ma != null && ma.resumed && !ma.onCoverfo()) {
+                                /* v39 앱 안 Hotels.com 화면: 그 화면 안에서 한 칸 뒤로 (Hotels.com 화면에는 명령 받는 곳이 없어 전에는 아무 일도 없었음) */
+                                ma.travelBack()
+                                sendOutput(ev.optString("call_id"), JSONObject().put("ok", true).put("note", "Went back one page in the in-app Hotels.com screen."), false)
+                                emit("{\"type\":\"sori.log\",\"text\":\"▶ 이전 화면\"}")
+                            }
+                            else if (ma?.resumed == true) emit(text)
                             else main.post { goBackOther(ev) }
                         }
                         /* v10 🖐 화면 도우미: 다른 앱 화면 누르기 · 읽기 */
@@ -931,6 +945,14 @@ class SoriService : Service(), WakeListener.Callback {
                 shutdown("말씀이 없어 대기로 돌아갔어요", null, false)
                 return
             }
+            /* v40 💤 */
+            val front = MainActivity.current?.resumed == true && MainActivity.current?.onCoverfo() == true
+            if (front && dozing) wakeUp(false)
+            else if (gMode && !dozing && !front && !playing && !responding && !relayBusy && System.currentTimeMillis() - maxOf(lastCmdAt, cmdAt) > DOZE_MS) {
+                dozing = true
+                bubble?.standby(true)
+                emit(JSONObject().put("type", "sori.log").put("text", "💤 대기 중 — \"${wakeName(this@SoriService)}\" 라고 부르거나 \"~해 줘\" 라고 말하면 다시 들어요").toString())
+            }
             main.postDelayed(this, 1_000)
         }
     }
@@ -990,6 +1012,14 @@ class SoriService : Service(), WakeListener.Callback {
                 override fun onText(text: String) {
                     if (!running) return
                     lastActive = System.currentTimeMillis()
+                    /* v40 💤 대기 중이면 이름이나 시키는 말일 때만 */
+                    if (dozing) {
+                        val t = wakeCut(text)
+                        if (t == null) return
+                        wakeUp(true)
+                        sayText(if (t.isBlank()) text else t)
+                        return
+                    }
                     sayText(text)
                 }
                 override fun onFatal(why: String) {
@@ -1009,6 +1039,7 @@ class SoriService : Service(), WakeListener.Callback {
 
     /* v37 받아쓴 말을 실시간 대화에 '글'로 넘기고 대답을 받는다 (화면 대화 기록에도 내 말로 보이게) */
     private fun sayText(t: String) {
+        lastCmdAt = System.currentTimeMillis()   /* v40 */
         clearPlayback()
         handleEvent(JSONObject().put("type", "conversation.item.input_audio_transcription.completed").put("transcript", t).toString())
         val content = JSONArray().put(JSONObject().put("type", "input_text").put("text", t))
@@ -1018,7 +1049,33 @@ class SoriService : Service(), WakeListener.Callback {
 
     /* v37 소리가 대답을 만들거나 말하는 동안은 받아쓰기 멈춤 */
     private fun syncHold() {
+        if (playing || responding) lastCmdAt = System.currentTimeMillis()   /* v40 소리가 말하는 동안·말한 직후는 대기로 가지 않음 */
         main.post { stt?.hold(playing || responding) }
+    }
+
+    /* v40 💤 대기에서 깨기 */
+    private fun wakeUp(byVoice: Boolean) {
+        if (!dozing) return
+        dozing = false
+        lastCmdAt = System.currentTimeMillis()
+        bubble?.standby(false)
+        emit(JSONObject().put("type", "sori.log").put("text", if (byVoice) "👂 다시 들어요" else "👂 대기 끝").toString())
+    }
+
+    /* v40 💤 대기 중에 들린 말: 이름이 들어 있으면 이름 뒤의 말(이름만이면 "")을, 시키는 말이면 그대로, 아니면 null(무시) */
+    private fun wakeCut(said: String): String? {
+        val s = said.trim()
+        if (s.isEmpty()) return null
+        val names = (listOf(wakeName(this)) + wakeAlts(this)).map { it.trim() }.filter { it.length >= 2 }
+        for (n in names) {
+            val i = s.indexOf(n)
+            if (i >= 0) return s.substring(i + n.length).trimStart(' ', ',', '.', '!', '?', '야', '아').trim()
+        }
+        val head = s.filter { it.isLetterOrDigit() }.take(6)
+        if (head.isNotEmpty() && WakeMatch.hit(head, names)) return s
+        val t = s.replace(Regex("[\\s.!?~]+$"), "")
+        val cmd = Regex("(해\\s*줘|해\\s*주세요|해\\s*봐|해요|해|줘|주세요|열어|켜|꺼|가|가자|찾아|알려|보여|틀어|불러|멈춰|그만|끝내|닫아|돌아가|들어가|뒤로)$")
+        return if (cmd.containsMatchIn(t)) s else null
     }
 
     /* 예전 방식: 마이크 소리(24kHz)를 그대로 음성 대화로 보낸다 (OpenAI 가 받아쓰기) */
@@ -1141,10 +1198,13 @@ class SoriService : Service(), WakeListener.Callback {
        내가 직접 연 다른 앱(구글 렌즈 등)으로 갈 때는 띄우지 않는다. coverfo 화면 안에서는 화면의 🟣 */
     @Volatile private var cmdAt = 0L
 
-    fun showBubble() {
+    /* v39 force = 앱 안 Hotels.com 화면 (명령 뒤 20초가 지났어도 대화 중이면 아이콘) */
+    val hasBubble: Boolean get() = bubble != null
+    fun showBubble(force: Boolean = false) {
         main.post {
             if ((!running && !keepIcon) || bubble != null || !Settings.canDrawOverlays(this)) return@post
-            if (System.currentTimeMillis() - cmdAt > 20_000L) return@post
+            if (!force && System.currentTimeMillis() - cmdAt > 20_000L) return@post
+            MainActivity.current?.hideTravelBubble()   /* v39 아이콘은 하나만 */
             /* v15: 대화 중이면 누르면 대화 화면, 대기 모양이면 누르면 바로 다시 대화 */
             /* v37 폰 받아쓰기 대화 중에는 누르면 그 자리에서: 소리가 말하는 중이면 멈추고 바로 듣기 (coverfo 로 가지 않음) */
             bubble = Bubble(this) { if (running && gMode) bubbleTalk() else if (running) bringToFront(true) else talkFront() }.also {
@@ -1155,6 +1215,7 @@ class SoriService : Service(), WakeListener.Callback {
     }
 
     private fun bubbleTalk() {
+        wakeUp(false)   /* v40 대기 중 아이콘을 누르면 다시 듣기 */
         if (playing || responding) {
             clearPlayback()
             sendRaw("{\"type\":\"response.cancel\"}")
@@ -1197,6 +1258,7 @@ class SoriService : Service(), WakeListener.Callback {
             rtc?.close()
             rtc = null
             stt?.stop(); stt = null; gMode = false; responding = false   /* v37 */
+            dozing = false   /* v40 */
             try { rec?.stop() } catch (e: Exception) { }
             try { rec?.release() } catch (e: Exception) { }
             rec = null

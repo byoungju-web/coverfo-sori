@@ -77,13 +77,28 @@ class MainActivity : Activity() {
     private fun showTravelBubble() {
         runOnUiThread {
             try {
-                if (tBubble != null || SoriService.instance?.running == true) return@runOnUiThread
+                /* v39 아이콘은 하나만: 대화 아이콘이 떠 있으면 여행 아이콘은 띄우지 않음 */
+                if (tBubble != null || SoriService.instance?.running == true || SoriService.instance?.hasBubble == true) return@runOnUiThread
                 if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this)) return@runOnUiThread
                 tBubble = Bubble(applicationContext) { travelTap() }.also { it.show(); it.standby(false) }
             } catch (e: Exception) { tBubble = null }
         }
     }
-    private fun hideTravelBubble() { runOnUiThread { try { tBubble?.hide() } catch (e: Exception) { }; tBubble = null } }
+    fun hideTravelBubble() { runOnUiThread { try { tBubble?.hide() } catch (e: Exception) { }; tBubble = null } }   /* v39 대화 아이콘이 뜰 때 SoriService 가 부름 */
+
+    /* v39 지금 화면이 coverfo 인지 (Hotels.com 을 앱 안에서 보는 중이면 false) — WebView 는 다른 스레드에서 못 읽어서 주소가 바뀔 때마다 적어 둠 */
+    @Volatile var curHost = "coverfo.com"
+    fun onCoverfo(): Boolean = curHost == "coverfo.com" || curHost.endsWith(".coverfo.com")
+    private val afterHome = mutableListOf<String>()
+    /* v39 Hotels.com 화면에서 "뒤로 가": 그 화면 안에서 한 칸 뒤로 (더 없으면 coverfo 홈) */
+    fun travelBack() { runOnUiThread { try { if (web.canGoBack()) web.goBack() else web.loadUrl(HOME) } catch (e: Exception) { } } }
+    /* v39 Hotels.com 화면에서 다른 명령: coverfo 홈으로 돌아온 뒤(화면이 다 뜬 다음) 명령을 화면에 넘김 — Hotels.com 화면에는 명령 받는 곳이 없음 */
+    fun homeThenEmit(json: String) {
+        runOnUiThread {
+            synchronized(afterHome) { afterHome.add(json) }
+            try { web.loadUrl(HOME) } catch (e: Exception) { }
+        }
+    }
     private fun travelTap() {
         hideTravelBubble(); travelAt = 0L
         try {
@@ -147,7 +162,7 @@ class MainActivity : Activity() {
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
                 super.doUpdateVisitedHistory(view, url, isReload)
                 /* v30 🏨 뒤로가기 등으로 coverfo 화면에 돌아오면 Hotels.com 안 보기 끝 */
-                try { val h = (Uri.parse(url ?: "").host ?: "").lowercase(); if (h == "coverfo.com" || h.endsWith(".coverfo.com")) { if (travelIn) { SoriService.instance?.hideBubble(); hideTravelBubble() }; travelIn = false; hop = false } } catch (e: Exception) { }
+                try { val h = (Uri.parse(url ?: "").host ?: "").lowercase(); curHost = h; if (h == "coverfo.com" || h.endsWith(".coverfo.com")) { if (travelIn) { SoriService.instance?.hideBubble(); hideTravelBubble() }; travelIn = false; hop = false } } catch (e: Exception) { }
                 if (!BuildConfig.STORE) return
                 if (StoreGuard.blocked(url)) {
                     storeBlocked()
@@ -159,6 +174,14 @@ class MainActivity : Activity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
+                /* v39 Hotels.com 에서 돌아온 뒤 미뤄 둔 소리 명령을 화면에 넘김 (화면 스크립트가 준비될 시간을 조금 줌) */
+                try {
+                    val h = (Uri.parse(url).host ?: "").lowercase(); curHost = h
+                    if (h == "coverfo.com" || h.endsWith(".coverfo.com")) {
+                        val list = synchronized(afterHome) { val l = afterHome.toList(); afterHome.clear(); l }
+                        if (list.isNotEmpty()) web.postDelayed({ list.forEach { emit(it) } }, 1500)
+                    }
+                } catch (e: Exception) { }
                 /* v27 🛒 구글 플레이판: 충전·앱 내려받기·사람끼리 채팅을 화면에서 뺀다 (APK판은 그대로) */
                 if (BuildConfig.STORE) view.evaluateJavascript(StoreGuard.JS, null)
                 pendingLogin?.let { p ->
@@ -251,7 +274,7 @@ class MainActivity : Activity() {
             }
             if (TRAVEL_IN.any { host == it || host.endsWith(".$it") }) {   /* v30 🏨 */
                 travelIn = true
-                SoriService.instance?.showBubble()   /* v33 🏨 앱 안 Hotels.com 화면에도 소리 아이콘 (익스피디아 앱 위처럼) */
+                SoriService.instance?.showBubble(true)   /* v33 🏨 앱 안 Hotels.com 화면에도 소리 아이콘 · v39 명령 뒤 20초가 지나도 (대화 중이면 늘) */
                 showTravelBubble()   /* v34 소리 대화가 꺼져 있어도 */
                 return false
             }
@@ -584,7 +607,7 @@ class MainActivity : Activity() {
         super.onResume()
         resumed = true
         current = this
-        if (travelIn) { SoriService.instance?.showBubble(); showTravelBubble() } else { SoriService.instance?.hideBubble(); hideTravelBubble() }   /* v33 🏨 · v34 */
+        if (travelIn) { SoriService.instance?.showBubble(true); showTravelBubble() } else { SoriService.instance?.hideBubble(); hideTravelBubble() }   /* v33 🏨 · v34 */
         retireWake()
         /* 이름 대기를 켜 두었는데 서비스가 없으면(폰을 껐다 켰거나 앱이 정리됐을 때) 화면이 보일 때 다시 켠다 */
         if (SoriService.prefs(this).getBoolean("wakeOn", false) && SoriService.instance == null &&
