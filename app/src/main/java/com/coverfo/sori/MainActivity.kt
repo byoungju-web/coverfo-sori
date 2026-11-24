@@ -732,6 +732,12 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun isForeground(): Boolean = resumed
 
+        /* v41 🔇 홈 🎙(폰 음성 인식)이 듣기 시작·끝날 때 내는 '틱' 소리를 잠깐 끔 — ms 뒤 저절로 되돌림 (최대 4초) · 0 이면 바로 되돌림 */
+        @JavascriptInterface
+        fun beepMute(ms: Int) {
+            if (ms <= 0) BeepMute.release(0) else BeepMute.mute(this@MainActivity, ms.toLong())
+        }
+
         /* v23 🎨 소리 모습: 웹에서 고른 큐브 색(1~8 · 0 = 예전 보라 🗣️) → 다른 앱 위 아이콘도 같은 큐브 */
         @JavascriptInterface
         fun setChar(n: Int) {

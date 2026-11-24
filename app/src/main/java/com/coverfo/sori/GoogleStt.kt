@@ -67,6 +67,7 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
         try { sr?.cancel() } catch (e: Exception) { }
         try { sr?.destroy() } catch (e: Exception) { }
         sr = null
+        BeepMute.release(300)   /* v41 */
     }
 
     /** true: 잠깐 멈춤(소리가 말하는 중) · false: 다시 듣기 */
@@ -77,7 +78,9 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
             main.removeCallbacks(go)
             if (listening) {
                 listening = false
+                BeepMute.mute(ctx, 800)   /* v41 멈출 때 나는 틱 소리도 */
                 try { sr?.cancel() } catch (e: Exception) { }
+                BeepMute.release(400)
             }
         } else next(350)
     }
@@ -102,10 +105,12 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
             .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, ctx.packageName)
+        BeepMute.mute(ctx, 2500)   /* v41 🔇 듣기 시작 '틱' 소리 끄기 (준비되면 곧 되돌림) */
         try {
             s.startListening(i)
             listening = true
         } catch (e: Exception) {
+            BeepMute.release(0)
             fail("start")
         }
     }
@@ -119,6 +124,7 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
 
     override fun onResults(results: Bundle?) {
         listening = false
+        BeepMute.release(350)   /* v41 */
         errs = 0
         gotAny = true
         val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty()
@@ -128,6 +134,7 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
 
     override fun onError(error: Int) {
         listening = false
+        BeepMute.release(350)   /* v41 */
         if (!on || held) return                       // 멈추는 중에 오는 오류는 무시
         when (error) {
             SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> { errs = 0; next(120) }   // 말이 없었음 → 다시 듣기
@@ -139,10 +146,10 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
     }
 
     override fun onBeginningOfSpeech() { if (on && !held) cb.onBegin() }
-    override fun onReadyForSpeech(params: Bundle?) { }
+    override fun onReadyForSpeech(params: Bundle?) { BeepMute.release(400) }   /* v41 시작 틱이 지나간 뒤 되돌림 */
     override fun onRmsChanged(rmsdB: Float) { }
     override fun onBufferReceived(buffer: ByteArray?) { }
-    override fun onEndOfSpeech() { }
+    override fun onEndOfSpeech() { BeepMute.mute(ctx, 2500) }   /* v41 🔇 말이 끝날 때 '틱' 소리 끄기 (결과가 오면 되돌림) */
     override fun onPartialResults(partialResults: Bundle?) { }
     override fun onEvent(eventType: Int, params: Bundle?) { }
 }
