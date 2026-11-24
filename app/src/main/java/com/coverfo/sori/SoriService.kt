@@ -70,7 +70,9 @@ class SoriService : Service(), WakeListener.Callback {
         private const val DOZE_MS = 10_000L   /* v40 💤 */
 
         fun prefs(ctx: Context) = ctx.getSharedPreferences("sori", Context.MODE_PRIVATE)
-        fun sttGoogle(ctx: Context): Boolean = prefs(ctx).getBoolean("sttGoogle", true)   /* v37 */
+        /* v37 · v42: 기본은 예전 방식(마이크 소리를 그대로 보냄 — 웹 소리와 같음, 틱 소리 없음). 폰 음성 인식(구글)은 듣기를 켤 때마다 '틱' 소리가 나서
+           소리 창의 '🎙 내 말 받아쓰기: 폰 음성 인식'을 직접 켠 사람만 (예전 값 sttGoogle 은 기본 켜짐이었어서 새 이름으로 바꿔 모두 꺼짐에서 시작) */
+        fun sttGoogle(ctx: Context): Boolean = prefs(ctx).getBoolean("sttGoogle2", false)
         fun wakeName(ctx: Context): String = prefs(ctx).getString("wakeName", null)?.takeIf { it.isNotBlank() } ?: DEFAULT_NAME
         fun wakeAlts(ctx: Context): List<String> = try {
             val a = JSONArray(prefs(ctx).getString("wakeAlts", "[]"))

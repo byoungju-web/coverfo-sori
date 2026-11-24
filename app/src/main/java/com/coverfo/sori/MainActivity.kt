@@ -726,7 +726,7 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun setSttGoogle(on: Boolean) {
-            SoriService.prefs(this@MainActivity).edit().putBoolean("sttGoogle", on).apply()
+            SoriService.prefs(this@MainActivity).edit().putBoolean("sttGoogle2", on).apply()   /* v42 */
         }
 
         @JavascriptInterface
