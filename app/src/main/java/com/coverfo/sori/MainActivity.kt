@@ -729,6 +729,21 @@ class MainActivity : Activity() {
             SoriService.prefs(this@MainActivity).edit().putBoolean("sttGoogle2", on).apply()   /* v42 */
         }
 
+        /* v43 🗣 말로 끊기: true = 소리가 말할 때 말을 걸면 멈춤 (폰 음성 인식 대화) · false = 캐릭터·아이콘 누르기로만 */
+        @JavascriptInterface
+        fun bargeVoice(): Boolean = SoriService.bargeVoice(this@MainActivity)
+
+        @JavascriptInterface
+        fun setBargeVoice(on: Boolean) {
+            SoriService.prefs(this@MainActivity).edit().putBoolean("bargeVoice", on).apply()
+        }
+
+        /* v43 ✋ 소리 창 캐릭터를 누르면 소리 대답 멈추고 바로 듣기 */
+        @JavascriptInterface
+        fun interrupt() {
+            SoriService.instance?.interruptFromScreen()
+        }
+
         @JavascriptInterface
         fun isForeground(): Boolean = resumed
 

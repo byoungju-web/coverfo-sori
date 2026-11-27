@@ -72,7 +72,9 @@ class SoriService : Service(), WakeListener.Callback {
         fun prefs(ctx: Context) = ctx.getSharedPreferences("sori", Context.MODE_PRIVATE)
         /* v37 · v42: 기본은 예전 방식(마이크 소리를 그대로 보냄 — 웹 소리와 같음, 틱 소리 없음). 폰 음성 인식(구글)은 듣기를 켤 때마다 '틱' 소리가 나서
            소리 창의 '🎙 내 말 받아쓰기: 폰 음성 인식'을 직접 켠 사람만 (예전 값 sttGoogle 은 기본 켜짐이었어서 새 이름으로 바꿔 모두 꺼짐에서 시작) */
-        fun sttGoogle(ctx: Context): Boolean = prefs(ctx).getBoolean("sttGoogle2", false)
+        fun sttGoogle(ctx: Context): Boolean = prefs(ctx).getBoolean("sttGoogle2", true)   /* v43 기본 = 폰 음성 인식(구글) */
+        /* v43 🗣 말로 끊기 (폰 음성 인식 대화에서 소리가 말할 때 말을 걸면 멈춤) · 기본 켬 */
+        fun bargeVoice(ctx: Context): Boolean = prefs(ctx).getBoolean("bargeVoice", true)
         fun wakeName(ctx: Context): String = prefs(ctx).getString("wakeName", null)?.takeIf { it.isNotBlank() } ?: DEFAULT_NAME
         fun wakeAlts(ctx: Context): List<String> = try {
             val a = JSONArray(prefs(ctx).getString("wakeAlts", "[]"))
@@ -117,6 +119,8 @@ class SoriService : Service(), WakeListener.Callback {
        · 설정 sttGoogle=false 면 예전 방식 (coverfo 화면의 소리 창에서 바꿈) */
     private var stt: GoogleStt? = null
     @Volatile private var gMode = false
+    @Volatile private var wakeG = false          // v43 '소리야'로 깨운 대화: 첫 대답이 끝나면 폰 음성 인식으로 바꿈
+    private var barge: VoiceBarge? = null        // v43 🗣 말로 끊기
     @Volatile private var responding = false
     private var sttLangNow = ""
     private val hubHttp = OkHttpClient.Builder()
@@ -358,6 +362,7 @@ class SoriService : Service(), WakeListener.Callback {
             body.put("phone", 1)
             /* v26: 화면에서 시작한 대화는 WebRTC (최근 24시간 안에 실패했으면 WebSocket) */
             gMode = !fromWake && sttGoogle(this) && GoogleStt.available(this)   /* v37 폰 받아쓰기면 WebSocket 으로 (마이크를 폰 음성 인식이 씀) */
+            wakeG = fromWake && sttGoogle(this) && GoogleStt.available(this)   /* v43 깨울 때 들은 말은 예전 방식으로 보내고, 첫 대답 뒤 폰 음성 인식으로 */
             responding = false
             val useRtc = !gMode && !fromWake && System.currentTimeMillis() - p.getLong("rtcFailAt", 0L) > 24 * 3_600_000L
             if (useRtc) body.put("rtc", 1)
@@ -551,6 +556,7 @@ class SoriService : Service(), WakeListener.Callback {
                     /* v37 대답을 만드는 동안은 받아쓰기 멈춤 */
                     if (type == "response.created") { responding = true; syncHold() }
                     if (type == "response.done") { responding = false; syncHold() }
+                    if (type == "response.done" && wakeG) { wakeG = false; main.post { toGoogle() } }   /* v43 */
                     if (type.endsWith(".delta") && type.contains("audio") && !type.contains("transcript")) return
                     emit(text)
                 }
@@ -1052,7 +1058,43 @@ class SoriService : Service(), WakeListener.Callback {
     /* v37 소리가 대답을 만들거나 말하는 동안은 받아쓰기 멈춤 */
     private fun syncHold() {
         if (playing || responding) lastCmdAt = System.currentTimeMillis()   /* v40 소리가 말하는 동안·말한 직후는 대기로 가지 않음 */
-        main.post { stt?.hold(playing || responding) }
+        main.post { stt?.hold(playing || responding); bargeSync() }
+    }
+
+    /* v43 🗣 말로 끊기: 폰 음성 인식 대화에서 소리가 대답을 만들거나 말하는 동안만 마이크 크기를 잰다 */
+    private fun bargeSync() {
+        val want = running && gMode && !dozing && (playing || responding) && bargeVoice(this)
+        if (want && barge == null) {
+            barge = VoiceBarge(this) {
+                if (barge != null && running) {
+                    barge = null
+                    emit(JSONObject().put("type", "sori.log").put("text", "✋ 말을 걸어서 멈췄어요").toString())
+                    bubbleTalk()
+                }
+            }.also { it.start() }
+        } else if (!want && barge != null) {
+            barge?.stop(); barge = null
+        }
+    }
+
+    /* v43 '소리야'로 깨운 대화: 첫 대답이 끝나면 마이크(예전 방식)를 놓고 폰 음성 인식으로 듣기 */
+    private fun toGoogle() {
+        if (!running || gMode || ws == null) return
+        try { rec?.stop() } catch (e: Exception) { }
+        try { rec?.release() } catch (e: Exception) { }
+        rec = null
+        gMode = true
+        if (startGoogle()) {
+            emit(JSONObject().put("type", "sori.log").put("text", "🎙 받아쓰기: 폰 음성 인식(구글 · $sttLangNow)으로 바꿨어요").toString())
+        } else {
+            gMode = false
+            if (!startMic()) shutdown("마이크를 열지 못했어요", null, false)
+        }
+    }
+
+    /* v43 ✋ coverfo 소리 창에서 캐릭터를 누르면: 소리가 말하는 중이면 멈추고 바로 듣기 */
+    fun interruptFromScreen() {
+        main.post { if (running) bubbleTalk() }
     }
 
     /* v40 💤 대기에서 깨기 */
@@ -1260,6 +1302,7 @@ class SoriService : Service(), WakeListener.Callback {
             rtc?.close()
             rtc = null
             stt?.stop(); stt = null; gMode = false; responding = false   /* v37 */
+            barge?.stop(); barge = null; wakeG = false   /* v43 */
             dozing = false   /* v40 */
             try { rec?.stop() } catch (e: Exception) { }
             try { rec?.release() } catch (e: Exception) { }
