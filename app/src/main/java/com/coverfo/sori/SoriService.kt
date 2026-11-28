@@ -68,6 +68,7 @@ class SoriService : Service(), WakeListener.Callback {
         const val DEFAULT_NAME = "소리야"
         private const val IDLE_MS = 20_000L
         private const val DOZE_MS = 10_000L   /* v40 💤 */
+        private const val OFF_MS = 30_000L    /* v45 말이 없으면 30초 뒤 소리 끄기 */
 
         fun prefs(ctx: Context) = ctx.getSharedPreferences("sori", Context.MODE_PRIVATE)
         /* v37 · v42: 기본은 예전 방식(마이크 소리를 그대로 보냄 — 웹 소리와 같음, 틱 소리 없음). 폰 음성 인식(구글)은 듣기를 켤 때마다 '틱' 소리가 나서
@@ -548,8 +549,14 @@ class SoriService : Service(), WakeListener.Callback {
                     val said = ev.optString("transcript")
                     lastSaid = said
                     lastSaidAt = System.currentTimeMillis()
-                    if (nameOnly(said)) main.post { bringToFront(true) }
-                    emit(text)
+                    if (!gMode && endWord(said)) {   /* v45 "들어가"·"꺼 줘"·"그만" → 앱이 직접 끔 (coverfo 화면이 뒤에 있어도) */
+                        emit(text)
+                        sendRaw("{\"type\":\"response.cancel\"}")
+                        main.post { shutdown("대화를 마쳤어요", null, false) }
+                    } else {
+                        if (nameOnly(said)) main.post { bringToFront(true) }
+                        emit(text)
+                    }
                 }
                 else -> {
                     if (type.startsWith("response.")) lastActive = System.currentTimeMillis()
@@ -611,6 +618,16 @@ class SoriService : Service(), WakeListener.Callback {
     }
 
     /* v11: 받아쓴 말이 거의 이름뿐인지 ("소리야", "소리야?", "소리야 거기 있어") — 긴 명령은 그대로 대화가 처리 */
+    /* v45 끝내는 말 — coverfo 화면(v392)과 같은 말. 앞의 "헤이"·"소리야"(또는 내가 정한 이름)는 떼고 본다 */
+    private fun endWord(said: String): Boolean {
+        var s = said.replace(Regex("[\\s.,!?~…·]"), "")
+        val nm = wakeName(this).replace(Regex("\\s"), "")
+        s = s.replace(Regex("^(헤이)?소리야?"), "")
+        if (nm.length >= 2 && s.startsWith(nm)) s = s.substring(nm.length).replace(Regex("^(야|아)"), "")
+        s = s.replace(Regex("주세요$"), "줘")
+        return Regex("^(들어가(요|세요|라|있어)?|정지(해|해요|해줘)?|그만(해|해요|해줘|하자)?|꺼(줘|요|라)?|꺼져|종료(해|해요|해줘)?|끝(내|내줘|내요)?|멈춰(요|줘)?|스톱|stop|닫아(줘|요)?|됐어(요)?)$", RegexOption.IGNORE_CASE).matches(s)
+    }
+
     private fun nameOnly(said: String): Boolean {
         val t = said.filter { it.isLetterOrDigit() }
         if (t.isEmpty() || t.length > 12) return false
@@ -953,6 +970,11 @@ class SoriService : Service(), WakeListener.Callback {
                 shutdown("말씀이 없어 대기로 돌아갔어요", null, false)
                 return
             }
+            /* v45 대화가 없으면 30초 뒤 저절로 끄기 (소리가 말하거나 대답을 만드는 중 · 전화 연결 중은 빼고) */
+            if (!playing && !responding && !relayBusy && System.currentTimeMillis() - maxOf(lastActive, lastCmdAt) > OFF_MS) {
+                shutdown("말씀이 없어 소리를 껐어요", null, false)
+                return
+            }
             /* v40 💤 */
             val front = MainActivity.current?.resumed == true && MainActivity.current?.onCoverfo() == true
             if (front && dozing) wakeUp(false)
@@ -1035,7 +1057,7 @@ class SoriService : Service(), WakeListener.Callback {
                     if (!running) return
                     bubble?.standby(true)
                     emit("{\"type\":\"sori.listen\",\"on\":false}")
-                    emit(JSONObject().put("type", "sori.log").put("text", "⏸ 듣기를 쉬어요 — 말하려면 소리 아이콘이나 캐릭터를 누르세요").toString())
+                    emit(JSONObject().put("type", "sori.log").put("text", "⏸ 듣기를 쉬어요 — 30초 동안 말이 없으면 저절로 꺼져요 · 소리 창의 캐릭터를 누르면 다시 들어요").toString())
                 }
                 override fun onResume() {
                     if (!running) return
@@ -1059,6 +1081,11 @@ class SoriService : Service(), WakeListener.Callback {
 
     /* v37 받아쓴 말을 실시간 대화에 '글'로 넘기고 대답을 받는다 (화면 대화 기록에도 내 말로 보이게) */
     private fun sayText(t: String) {
+        if (endWord(t)) {   /* v45 "소리야 들어가"·"꺼 줘"·"그만" → 대답 없이 바로 끔 (카카오내비 등 다른 앱이 앞에 있어도) */
+            emit(JSONObject().put("type", "conversation.item.input_audio_transcription.completed").put("transcript", t).toString())
+            shutdown("대화를 마쳤어요", null, false)
+            return
+        }
         lastCmdAt = System.currentTimeMillis()   /* v40 */
         clearPlayback()
         handleEvent(JSONObject().put("type", "conversation.item.input_audio_transcription.completed").put("transcript", t).toString())
@@ -1263,7 +1290,8 @@ class SoriService : Service(), WakeListener.Callback {
             MainActivity.current?.hideTravelBubble()   /* v39 아이콘은 하나만 */
             /* v15: 대화 중이면 누르면 대화 화면, 대기 모양이면 누르면 바로 다시 대화 */
             /* v37 폰 받아쓰기 대화 중에는 누르면 그 자리에서: 소리가 말하는 중이면 멈추고 바로 듣기 (coverfo 로 가지 않음) */
-            bubble = Bubble(this) { if (running && gMode) bubbleTalk() else if (running) bringToFront(true) else talkFront() }.also {
+            /* v45 소리 아이콘을 누르면: 소리가 말하는(대답을 만드는) 중이면 멈추고, 아니면 소리를 끈다 · 꺼져 있으면 다시 대화 */
+            bubble = Bubble(this) { if (running) { if (playing || responding) bubbleTalk() else shutdown("대화를 마쳤어요", null, false) } else talkFront() }.also {
                 it.show()
                 if (running) it.speaking(playing) else it.standby(true)
             }
