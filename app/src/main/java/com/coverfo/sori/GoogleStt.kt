@@ -22,6 +22,8 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
         fun onBegin()                 // 말하기 시작
         fun onText(text: String)      // 한 마디 받아쓰기 끝
         fun onFatal(why: String)      // 이 폰에서는 쓸 수 없음 → 예전 방식으로
+        fun onPause() {}              // v44 ⏸ 한 번 들었는데 말이 없어 듣기를 쉼 (누르면 다시)
+        fun onResume() {}             // v44 ▶ 쉬던 듣기를 다시 켬
     }
 
     companion object {
@@ -50,12 +52,39 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
     private var listening = false
     private var errs = 0
     private var gotAny = false
+    /* v44 ⏸ 한 번만 켜기: 계속 켜 두지 않는다 — 한 번 듣고(말이 없거나 한 마디 받아쓴 뒤) 쉬었다가,
+       소리 대답이 끝날 때(hold → false) 또는 아이콘·캐릭터를 누를 때(kick) 다시 한 번만 켠다. 켜는 횟수가 줄어 '틱'도 준다 */
+    var paused = false
+        private set
+    private var noted = false
+    private val pauseNote = Runnable { if (on && paused && !held && !listening) { noted = true; cb.onPause() } }
+
+    private fun pause() {
+        paused = true
+        main.removeCallbacks(go)
+        main.removeCallbacks(pauseNote)
+        main.postDelayed(pauseNote, 1500)          // 바로 대답이 시작되면(hold) 쉼 표시 안 함
+    }
+
+    private fun unpause() {
+        paused = false
+        main.removeCallbacks(pauseNote)
+        if (noted) { noted = false; cb.onResume() }
+    }
+
+    /** v44 쉬는 중이면 지금 다시 한 번 듣기 (아이콘·캐릭터 누름) */
+    fun kick() {
+        if (!on || held || listening) return
+        unpause()
+        next(0)
+    }
 
     /** h: 처음부터 멈춘 채로 시작 (소리가 말하는 중 등) */
     fun start(h: Boolean) {
         if (on) return
         on = true
         held = h
+        paused = false; noted = false
         create()
         if (!h) next(0)
     }
@@ -64,6 +93,7 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
         on = false
         listening = false
         main.removeCallbacks(go)
+        main.removeCallbacks(pauseNote)
         try { sr?.cancel() } catch (e: Exception) { }
         try { sr?.destroy() } catch (e: Exception) { }
         sr = null
@@ -76,13 +106,14 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
         held = h
         if (h) {
             main.removeCallbacks(go)
+            main.removeCallbacks(pauseNote)
             if (listening) {
                 listening = false
                 BeepMute.mute(ctx, 800)   /* v41 멈출 때 나는 틱 소리도 */
                 try { sr?.cancel() } catch (e: Exception) { }
                 BeepMute.release(400)
             }
-        } else next(350)
+        } else { unpause(); next(350) }   /* v44 대답이 끝나면 한 번 켜기 */
     }
 
     private fun create() {
@@ -96,7 +127,7 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
     }
 
     private val go = Runnable {
-        if (!on || held || listening) return@Runnable
+        if (!on || held || listening || paused) return@Runnable
         val s = sr ?: run { cb.onFatal("no recognizer"); return@Runnable }
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -129,7 +160,7 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
         gotAny = true
         val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty()
         if (t.isNotEmpty() && !held && on) cb.onText(t)
-        if (on) next(120)
+        if (on && !held) pause()   /* v44 한 마디 받았으면 쉼 → 대답이 끝나면(hold false) 다시 한 번 */
     }
 
     override fun onError(error: Int) {
@@ -137,7 +168,7 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
         BeepMute.release(350)   /* v41 */
         if (!on || held) return                       // 멈추는 중에 오는 오류는 무시
         when (error) {
-            SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> { errs = 0; next(120) }   // 말이 없었음 → 다시 듣기
+            SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> { errs = 0; pause() }   // v44 말이 없었음 → 계속 다시 켜지 않고 쉼 (누르면 다시)
             SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> { on = false; cb.onFatal("permission") }
             SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> { create(); next(400) }
             12, 13 -> { on = false; cb.onFatal("language $error") }   // ERROR_LANGUAGE_NOT_SUPPORTED · ERROR_LANGUAGE_UNAVAILABLE
@@ -146,7 +177,7 @@ class GoogleStt(private val ctx: Context, private val lang: String, private val 
     }
 
     override fun onBeginningOfSpeech() { if (on && !held) cb.onBegin() }
-    override fun onReadyForSpeech(params: Bundle?) { BeepMute.release(400) }   /* v41 시작 틱이 지나간 뒤 되돌림 */
+    override fun onReadyForSpeech(params: Bundle?) { BeepMute.release(700) }   /* v41 시작 틱이 지나간 뒤 되돌림 · v44 0.4→0.7초 (늦게 울리는 폰) */
     override fun onRmsChanged(rmsdB: Float) { }
     override fun onBufferReceived(buffer: ByteArray?) { }
     override fun onEndOfSpeech() { BeepMute.mute(ctx, 2500) }   /* v41 🔇 말이 끝날 때 '틱' 소리 끄기 (결과가 오면 되돌림) */

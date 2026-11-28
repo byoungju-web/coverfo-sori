@@ -956,7 +956,7 @@ class SoriService : Service(), WakeListener.Callback {
             /* v40 💤 */
             val front = MainActivity.current?.resumed == true && MainActivity.current?.onCoverfo() == true
             if (front && dozing) wakeUp(false)
-            else if (gMode && !dozing && !front && !playing && !responding && !relayBusy && System.currentTimeMillis() - maxOf(lastCmdAt, cmdAt) > DOZE_MS) {
+            else if (gMode && !dozing && stt?.paused != true && !front && !playing && !responding && !relayBusy && System.currentTimeMillis() - maxOf(lastCmdAt, cmdAt) > DOZE_MS) {   /* v44 쉬는 중엔 💤 안내 안 함 */
                 dozing = true
                 bubble?.standby(true)
                 emit(JSONObject().put("type", "sori.log").put("text", "💤 대기 중 — \"${wakeName(this@SoriService)}\" 라고 부르거나 \"~해 줘\" 라고 말하면 다시 들어요").toString())
@@ -1029,6 +1029,18 @@ class SoriService : Service(), WakeListener.Callback {
                         return
                     }
                     sayText(text)
+                }
+                /* v44 ⏸ 한 번 들었는데 말이 없어 쉼 → 아이콘은 대기 모양 · 화면에 알림 / ▶ 다시 켬 */
+                override fun onPause() {
+                    if (!running) return
+                    bubble?.standby(true)
+                    emit("{\"type\":\"sori.listen\",\"on\":false}")
+                    emit(JSONObject().put("type", "sori.log").put("text", "⏸ 듣기를 쉬어요 — 말하려면 소리 아이콘이나 캐릭터를 누르세요").toString())
+                }
+                override fun onResume() {
+                    if (!running) return
+                    if (!dozing) bubble?.standby(false)
+                    emit("{\"type\":\"sori.listen\",\"on\":true}")
                 }
                 override fun onFatal(why: String) {
                     main.post {
@@ -1268,6 +1280,7 @@ class SoriService : Service(), WakeListener.Callback {
         }
         lastActive = System.currentTimeMillis()
         syncHold()
+        stt?.kick()   /* v44 ⏸ 쉬는 중이면 다시 한 번 듣기 (말하는 중이었다면 hold 가 풀린 뒤 저절로) */
     }
 
     /* v15: '말이 없어서' 대화가 끝나도 아이콘은 대기 모양으로 남긴다 ("들어가"·끝내기로 끝내면 사라짐) */
